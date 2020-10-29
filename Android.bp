@@ -58,3 +58,12 @@ cc_binary_host {
     ],
 }
 
+sh_binary_host {
+    name: "mkerofsimage.sh",
+    src: "mkerofsimage.sh",
+    required: [
+        "img2simg",
+        "mkfs.erofs",
+    ],
+}
+
