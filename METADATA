@@ -1,0 +1,17 @@
+name: "erofs-utils"
+description:
+    "EROFS Utilities"
+
+third_party {
+  url {
+    type: GIT
+    value: "https://github.com/hsiangkao/erofs-utils"
+  }
+  version: "v1.1"
+  license_type: RESTRICTED
+  last_upgrade_date {
+    year: 2020
+    month: 8
+    day: 5
+  }
+}
