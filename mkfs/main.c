@@ -33,6 +33,14 @@ static struct option long_options[] = {
 	{"help", no_argument, 0, 1},
 	{"exclude-path", required_argument, NULL, 2},
 	{"exclude-regex", required_argument, NULL, 3},
+#ifdef HAVE_LIBSELINUX
+	{"file-contexts", required_argument, NULL, 4},
+#endif
+#ifdef WITH_ANDROID
+	{"mount-point", required_argument, NULL, 10},
+	{"product-out", required_argument, NULL, 11},
+	{"fs-config-file", required_argument, NULL, 12},
+#endif
 	{0, 0, 0, 0},
 };
 
@@ -53,14 +61,23 @@ static void usage(void)
 {
 	fputs("usage: [options] FILE DIRECTORY\n\n"
 	      "Generate erofs image from DIRECTORY to FILE, and [options] are:\n"
-	      " -zX[,Y]           X=compressor (Y=compression level, optional)\n"
-	      " -d#               set output message level to # (maximum 9)\n"
-	      " -x#               set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
-	      " -EX[,...]         X=extended options\n"
-	      " -T#               set a fixed UNIX timestamp # to all files\n"
-	      " --exclude-path=X  avoid including file X (X = exact literal path)\n"
-	      " --exclude-regex=X avoid including files that match X (X = regular expression)\n"
-	      " --help            display this help and exit\n"
+	      " -zX[,Y]            X=compressor (Y=compression level, optional)\n"
+	      " -d#                set output message level to # (maximum 9)\n"
+	      " -x#                set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
+	      " -EX[,...]          X=extended options\n"
+	      " -T#                set a fixed UNIX timestamp # to all files\n"
+	      " --exclude-path=X   avoid including file X (X = exact literal path)\n"
+	      " --exclude-regex=X  avoid including files that match X (X = regular expression)\n"
+#ifdef HAVE_LIBSELINUX
+	      " --file-contexts=X  specify a file contexts file to setup selinux labels\n"
+#endif
+	      " --help             display this help and exit\n"
+#ifdef WITH_ANDROID
+	      "\nwith following android-specific options:\n"
+	      " --mount-point=X    X=prefix of target fs path (default: /)\n"
+	      " --product-out=X    X=product_out directory\n"
+	      " --fs-config-file=X X=fs_config file\n"
+#endif
 	      "\nAvailable compressors are: ", stderr);
 	print_available_compressors(stderr, ", ");
 }
@@ -198,6 +215,27 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 				return opt;
 			}
 			break;
+
+		case 4:
+			opt = erofs_selabel_open(optarg);
+			if (opt && opt != -EBUSY)
+				return opt;
+			break;
+#ifdef WITH_ANDROID
+		case 10:
+			cfg.mount_point = optarg;
+			/* all trailing '/' should be deleted */
+			opt = strlen(cfg.mount_point);
+			if (opt && optarg[opt - 1] == '/')
+				optarg[opt - 1] = '\0';
+			break;
+		case 11:
+			cfg.target_out_path = optarg;
+			break;
+		case 12:
+			cfg.fs_config_file = optarg;
+			break;
+#endif
 		case 1:
 			usage();
 			exit(0);
@@ -391,8 +429,16 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+#ifdef WITH_ANDROID
+	if (cfg.fs_config_file &&
+	    load_canned_fs_config(cfg.fs_config_file) < 0) {
+		erofs_err("failed to load fs config %s", cfg.fs_config_file);
+		return 1;
+	}
+#endif
+
 	erofs_show_config();
-	erofs_exclude_set_root(cfg.c_src_path);
+	erofs_set_fs_root(cfg.c_src_path);
 
 	sb_bh = erofs_buffer_init();
 	if (IS_ERR(sb_bh)) {
