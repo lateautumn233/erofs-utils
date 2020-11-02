@@ -56,6 +56,12 @@ cc_binary_host {
         "lib/*.c",
         "mkfs/*.c",
     ],
+
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 sh_binary_host {
@@ -65,5 +71,10 @@ sh_binary_host {
         "img2simg",
         "mkfs.erofs",
     ],
-}
 
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+}
