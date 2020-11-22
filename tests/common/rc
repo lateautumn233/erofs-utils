@@ -1,0 +1,202 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0+
+
+tmp=/tmp/$$
+mkdir -p $tmp 1>/dev/null 2>&1
+
+if [ ! -z $srcdir ]; then
+	exec > $tmp.out
+	cd $srcdir; here="`pwd`"; cd - > /dev/null
+else
+	here="`pwd`"
+fi
+
+rm -f $seqres.* 1>/dev/null 2>&1
+
+# set up signal handler
+status=1	# failure is the default!
+trap "_cleanup; exit \$status" 0 1 2 3 15
+
+# all tests should use a common language setting to prevent golden
+# output mismatches.
+export LANG=C
+export LC_ALL=C
+
+[ -z $FSTYP ] && FSTYP="erofs"
+
+# make sure we have a standard umask
+umask 022
+
+tmp=/tmp/$$
+mkdir -p $tmp 1>/dev/null 2>&1
+
+_cleanup()
+{
+	_check_results
+	res=$?
+	_scratch_unmount 2> /dev/null
+	cleanup
+	rm -rf $tmp/ 1>/dev/null 2>&1
+	[ $res -ne 0 ] && exit 1
+}
+
+_fatal()
+{
+    echo "$*"
+    status=1
+    exit 1
+}
+
+export MOUNT_PROG="`bash -c "type -P mount"`"
+[ "$MOUNT_PROG" = "" ] && _fatal "mount not found"
+
+export UMOUNT_PROG="`bash -c "type -P umount"`"
+[ "$UMOUNT_PROG" = "" ] && _fatal "umount not found"
+[ "$MKFS_EROFS_PROG" = "" ] && _fatal "mkfs.erofs not found"
+
+[ "$FSTYP" = "erofsfuse" -a "$EROFSFUSE_PROG" = "" ] && \
+	_fatal "erofsfuse not found"
+
+# just plain bail out
+_fail()
+{
+    echo "$*" | tee -a $seqres.full
+    echo "(see $seqres.full for details)"
+    status=1
+    exit 1
+}
+
+# bail out, setting up .notrun file. Need to kill the filesystem check files
+# here, otherwise they are set incorrectly for the next test.
+#
+_notrun()
+{
+    echo "$*" > $seqres.notrun
+    echo "$seq not run: $*"
+    rm -f ${RESULT_DIR}/require_test*
+    rm -f ${RESULT_DIR}/require_scratch*
+
+    status=77
+    exit 77
+}
+
+# this test requires erofs kernel support
+_require_erofs()
+{
+	if [ "$FSTYP" = "erofsfuse" ]; then
+		return
+	fi
+
+	[ "$(id -u)" = "0" ] || _notrun "must be run as root"
+
+	modprobe erofs >/dev/null 2>&1
+	grep -q erofs /proc/filesystems ||
+		_notrun "this test requires EROFS kernel support"
+}
+
+# Do the actual mkfs work on SCRATCH_DEV.
+_scratch_do_mkfs()
+{
+	local mkfs_cmd=$1
+	local mkfs_filter=$2
+	shift 2
+	local extra_mkfs_options="$*"
+	local mkfs_status
+	local tmp=`mktemp -u`
+
+	eval "$mkfs_cmd $MKFS_OPTIONS $SCRATCH_DEV $extra_mkfs_options" \
+		1>$tmp.mkfsstd 2>$tmp.mkfserr
+	mkfs_status=$?
+
+	# output stored mkfs output, filtering unnecessary output from stderr
+	cat $tmp.mkfsstd
+	eval "cat $tmp.mkfserr | $mkfs_filter" >&2
+
+	rm -f $tmp.mkfserr $tmp.mkfsstd
+	return $mkfs_status
+}
+
+_scratch_mkfs()
+{
+	local mkfs_cmd="$MKFS_EROFS_PROG"
+	local mkfs_filter="true"
+
+	_scratch_do_mkfs "$mkfs_cmd" "$mkfs_filter" $* 2>$tmp.mkfserr 1>$tmp.mkfsstd
+	mkfs_status=$?
+
+	# output mkfs stdout and stderr
+	cat $tmp.mkfsstd
+	cat $tmp.mkfserr >&2
+	rm -f $tmp.mkfserr $tmp.mkfsstd
+
+	return $mkfs_status
+}
+
+_scratch_mount_options()
+{
+	echo $SCRATCH_OPTIONS $SCRATCH_DEV $SCRATCH_MNT
+}
+
+# mount scratch device with given options but don't check mount status
+_try_scratch_mount()
+{
+	if [ "$FSTYP" = "erofsfuse" ]; then
+		$EROFSFUSE_PROG `_scratch_mount_options $*`
+	else
+		[ -f $SCRATCH_DEV ] && \
+			SCRATCH_OPTIONS="$SCRATCH_OPTIONS -o loop"
+		$MOUNT_PROG -t $FSTYP `_scratch_mount_options $*`
+	fi
+}
+
+# mount scratch device with given options and _fail if mount fails
+_scratch_mount()
+{
+	_try_scratch_mount $* || _fail "mount failed"
+}
+
+_scratch_unmount()
+{
+	if [ "$FSTYP" = "erofsfuse" ]; then
+		fusermount -u $SCRATCH_MNT
+	else
+		$UMOUNT_PROG $SCRATCH_MNT
+	fi
+}
+
+# clean up old scratch mount first
+_scratch_unmount 2> /dev/null
+
+_scratch_remount()
+{
+	local opts="$1"
+
+	test -n "$opts" && _try_scratch_mount "-o remount,$opts"
+}
+
+_scratch_cycle_mount()
+{
+	local opts="$1"
+
+	test -n "$opts" && opts="-o $opts"
+	_scratch_unmount
+	_try_scratch_mount "$opts" || _fail "cycle mount failed"
+}
+
+_get_filesize()
+{
+    stat -c %s "$1"
+}
+
+_check_results()
+{
+	[ -z $srcdir ] && return 0
+	[ -f $seqres.notrun ] && return 0
+
+	if ! diff `dirname $0`/$seq.out $tmp.out >/dev/null 2>&1 ; then
+		mv $tmp.out $seqres.out.bad
+		return 1
+	fi
+	return 0
+}
+
