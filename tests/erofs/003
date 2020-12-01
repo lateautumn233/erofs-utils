@@ -1,0 +1,52 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0+
+seq=`basename $0`
+seqres=$RESULT_DIR/$seq
+
+# get standard environment, filters and checks
+. "${srcdir}/common/rc"
+
+cleanup()
+{
+	cd /
+	rm -rf $tmp.*
+}
+
+# remove previous $seqres.full before test
+rm -f $seqres.full
+
+# real QA test starts here
+echo "QA output created by $seq"
+
+if [ -z $SCRATCH_DEV ]; then
+	SCRATCH_DEV=$tmp/erofs_$seq.img
+	rm -f SCRATCH_DEV
+fi
+
+localdir="$tmp/$seq"
+rm -rf $localdir
+mkdir -p $localdir
+
+# mkfs long symlink (non-fast symlink)
+FNAME1=$(printf %255s | tr " " "x")
+FNAME4="$FNAME1/$FNAME1/$FNAME1/$FNAME1"
+FNAME="$FNAME4/$FNAME4/$FNAME4/$FNAME4"
+
+ln -s $FNAME $localdir/symlink
+
+_scratch_mkfs $localdir || _fail "failed to mkfs"
+
+# test long symlink (non-fast symlink)
+_require_erofs
+
+_scratch_mount 2>>$seqres.full
+
+MD5='a487a80b24d56a83b952fa70ff961297'
+realmd5=$(readlink $SCRATCH_MNT/symlink | tr -d '\n' | md5sum | cut -d' ' -f1)
+[ "x$realmd5" = "x$MD5" ] || _fail "-->checkmd5 FAILED"
+
+_scratch_unmount
+
+echo Silence is golden
+status=0
+exit 0
