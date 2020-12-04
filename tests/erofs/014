@@ -1,0 +1,64 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0+
+seq=`basename $0`
+seqres=$RESULT_DIR/$seq
+
+# get standard environment, filters and checks
+. "${srcdir}/common/rc"
+
+cleanup()
+{
+	cd /
+	rm -rf $tmp.*
+}
+
+# remove previous $seqres.full before test
+rm -f $seqres.full
+
+# real QA test starts here
+echo "QA output created by $seq"
+
+if [ -z $SCRATCH_DEV ]; then
+	SCRATCH_DEV=$tmp/erofs_$seq.img
+	rm -f SCRATCH_DEV
+fi
+
+localdir="$tmp/$seq"
+rm -rf $localdir
+
+[ "$(id -u)" = "0" ] || \
+	_notrun "This testcase must be run as root, skipped."
+
+tds="$localdir/s"
+tmg1="$localdir/s1.img"
+tmg2="$localdir/s2.img"
+tdd1="$localdir/d/d1"
+tdd2="$localdir/d/d2"
+
+mkdir -p $tds
+touch $tds/t
+$MKFS_EROFS_PROG $MKFS_OPTIONS $tmg1 $tds 1>/dev/null 2>&1
+cp $tmg1 $tmg2
+
+mkdir -p $tdd1 $tdd2
+$MOUNT_PROG -t erofs -o loop $tmg1 $tdd1 || \
+	_notrun "kernel must supports erofs, skipped."
+$MOUNT_PROG -t erofs -o loop $tmg2 $tdd2
+_scratch_mkfs $localdir/d || _fail "failed to mkfs"
+
+$UMOUNT_PROG $tdd1
+$UMOUNT_PROG $tdd2
+
+# test if it handles cross-device sub-mount improperly
+_require_erofs
+
+_scratch_mount 2>>$seqres.full
+
+[ "x`stat -c %i $SCRATCH_MNT/d1/t`" = "x`stat -c %i $SCRATCH_MNT/d2/t`" ] && \
+	_fail "-> buggy cross-device sub-mount"
+
+_scratch_unmount
+
+echo Silence is golden
+status=0
+exit 0
