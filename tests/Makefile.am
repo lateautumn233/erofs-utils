@@ -58,6 +58,9 @@ TESTS += erofs/010
 # 011 - (legacy image) verify lz4hc compressed image
 TESTS += erofs/011
 
+# 012 - check the hard-link functionality
+TESTS += erofs/012
+
 # 013 - check if hardlinked directories are allowed
 TESTS += erofs/013
 
