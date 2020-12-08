@@ -66,6 +66,9 @@ static void usage(void)
 	      " -x#                set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
 	      " -EX[,...]          X=extended options\n"
 	      " -T#                set a fixed UNIX timestamp # to all files\n"
+#ifdef HAVE_LIBUUID
+	      " -UX                use a given filesystem UUID\n"
+#endif
 	      " --exclude-path=X   avoid including file X (X = exact literal path)\n"
 	      " --exclude-regex=X  avoid including files that match X (X = regular expression)\n"
 #ifdef HAVE_LIBSELINUX
@@ -149,7 +152,7 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 	char *endptr;
 	int opt, i;
 
-	while((opt = getopt_long(argc, argv, "d:x:z:E:T:",
+	while((opt = getopt_long(argc, argv, "d:x:z:E:T:U:",
 				 long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'z':
@@ -198,7 +201,16 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 				erofs_err("invalid UNIX timestamp %s", optarg);
 				return -EINVAL;
 			}
+			cfg.c_timeinherit = TIMESTAMP_FIXED;
 			break;
+#ifdef HAVE_LIBUUID
+		case 'U':
+			if (uuid_parse(optarg, sbi.uuid)) {
+				erofs_err("invalid UUID %s", optarg);
+				return -EINVAL;
+			}
+			break;
+#endif
 		case 2:
 			opt = erofs_parse_exclude_path(optarg, false);
 			if (opt) {
@@ -367,18 +379,45 @@ static int erofs_mkfs_superblock_csum_set(void)
 	return 0;
 }
 
-static void erofs_mkfs_generate_uuid(void)
+static void erofs_mkfs_default_options(void)
 {
-	char uuid_str[37] = "not available";
+	cfg.c_legacy_compress = false;
+	sbi.feature_incompat = EROFS_FEATURE_INCOMPAT_LZ4_0PADDING;
+	sbi.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
 
+	/* generate a default uuid first */
 #ifdef HAVE_LIBUUID
 	do {
 		uuid_generate(sbi.uuid);
 	} while (uuid_is_null(sbi.uuid));
-
-	uuid_unparse_lower(sbi.uuid, uuid_str);
 #endif
-	erofs_info("filesystem UUID: %s", uuid_str);
+}
+
+/* https://reproducible-builds.org/specs/source-date-epoch/ for more details */
+int parse_source_date_epoch(void)
+{
+	char *source_date_epoch;
+	unsigned long long epoch = -1ULL;
+	char *endptr;
+
+	source_date_epoch = getenv("SOURCE_DATE_EPOCH");
+	if (!source_date_epoch)
+		return 0;
+
+	epoch = strtoull(source_date_epoch, &endptr, 10);
+	if (epoch == -1ULL || *endptr != '\0') {
+		erofs_err("Environment variable $SOURCE_DATE_EPOCH %s is invalid",
+			  source_date_epoch);
+		return -EINVAL;
+	}
+
+	if (cfg.c_force_inodeversion != FORCE_INODE_EXTENDED)
+		erofs_info("SOURCE_DATE_EPOCH is set, forcely generate extended inodes instead");
+
+	cfg.c_force_inodeversion = FORCE_INODE_EXTENDED;
+	cfg.c_unix_timestamp = epoch;
+	cfg.c_timeinherit = TIMESTAMP_CLAMPING;
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -390,18 +429,23 @@ int main(int argc, char **argv)
 	struct stat64 st;
 	erofs_blk_t nblocks;
 	struct timeval t;
+	char uuid_str[37] = "not available";
 
 	erofs_init_configure();
 	fprintf(stderr, "%s %s\n", basename(argv[0]), cfg.c_version);
 
-	cfg.c_legacy_compress = false;
-	sbi.feature_incompat = EROFS_FEATURE_INCOMPAT_LZ4_0PADDING;
-	sbi.feature_compat = EROFS_FEATURE_COMPAT_SB_CHKSUM;
+	erofs_mkfs_default_options();
 
 	err = mkfs_parse_options_cfg(argc, argv);
 	if (err) {
 		if (err == -EINVAL)
 			usage();
+		return 1;
+	}
+
+	err = parse_source_date_epoch();
+	if (err) {
+		usage();
 		return 1;
 	}
 
@@ -461,7 +505,11 @@ int main(int argc, char **argv)
 		goto exit;
 	}
 
-	erofs_mkfs_generate_uuid();
+#ifdef HAVE_LIBUUID
+	uuid_unparse_lower(sbi.uuid, uuid_str);
+#endif
+	erofs_info("filesystem UUID: %s", uuid_str);
+
 	erofs_inode_manager_init();
 
 	err = erofs_build_shared_xattrs_from_path(cfg.c_src_path);

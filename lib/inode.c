@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs_utils/lib/inode.c
+ * erofs-utils/lib/inode.c
  *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
@@ -25,7 +25,7 @@
 struct erofs_sb_info sbi;
 
 #define S_SHIFT                 12
-static unsigned char erofs_type_by_mode[S_IFMT >> S_SHIFT] = {
+static unsigned char erofs_ftype_by_mode[S_IFMT >> S_SHIFT] = {
 	[S_IFREG >> S_SHIFT]  = EROFS_FT_REG_FILE,
 	[S_IFDIR >> S_SHIFT]  = EROFS_FT_DIR,
 	[S_IFCHR >> S_SHIFT]  = EROFS_FT_CHRDEV,
@@ -35,7 +35,12 @@ static unsigned char erofs_type_by_mode[S_IFMT >> S_SHIFT] = {
 	[S_IFLNK >> S_SHIFT]  = EROFS_FT_SYMLINK,
 };
 
-#define NR_INODE_HASHTABLE	64
+static unsigned char erofs_mode_to_ftype(umode_t mode)
+{
+	return erofs_ftype_by_mode[(mode & S_IFMT) >> S_SHIFT];
+}
+
+#define NR_INODE_HASHTABLE	16384
 
 struct list_head inode_hashtable[NR_INODE_HASHTABLE];
 
@@ -54,14 +59,14 @@ static struct erofs_inode *erofs_igrab(struct erofs_inode *inode)
 }
 
 /* get the inode from the (source) inode # */
-struct erofs_inode *erofs_iget(ino_t ino)
+struct erofs_inode *erofs_iget(dev_t dev, ino_t ino)
 {
 	struct list_head *head =
-		&inode_hashtable[ino % NR_INODE_HASHTABLE];
+		&inode_hashtable[(ino ^ dev) % NR_INODE_HASHTABLE];
 	struct erofs_inode *inode;
 
 	list_for_each_entry(inode, head, i_hash)
-		if (inode->i_ino[1] == ino)
+		if (inode->i_ino[1] == ino && inode->dev == dev)
 			return erofs_igrab(inode);
 	return NULL;
 }
@@ -156,7 +161,7 @@ static int __allocate_inode_bh_data(struct erofs_inode *inode,
 int erofs_prepare_dir_file(struct erofs_inode *dir)
 {
 	struct erofs_dentry *d;
-	unsigned int d_size;
+	unsigned int d_size, i_nlink;
 	int ret;
 
 	/* dot is pointed to the current dir inode */
@@ -169,16 +174,28 @@ int erofs_prepare_dir_file(struct erofs_inode *dir)
 	d->inode = erofs_igrab(dir->i_parent);
 	d->type = EROFS_FT_DIR;
 
-	/* let's calculate dir size */
+	/* let's calculate dir size and update i_nlink */
 	d_size = 0;
+	i_nlink = 0;
 	list_for_each_entry(d, &dir->i_subdirs, d_child) {
 		int len = strlen(d->name) + sizeof(struct erofs_dirent);
 
 		if (d_size % EROFS_BLKSIZ + len > EROFS_BLKSIZ)
 			d_size = round_up(d_size, EROFS_BLKSIZ);
 		d_size += len;
+
+		i_nlink += (d->type == EROFS_FT_DIR);
 	}
 	dir->i_size = d_size;
+	/*
+	 * if there're too many subdirs as compact form, set nlink=1
+	 * rather than upgrade to use extented form instead.
+	 */
+	if (i_nlink > USHRT_MAX &&
+	    dir->inode_isize == sizeof(struct erofs_inode_compact))
+		dir->i_nlink = 1;
+	else
+		dir->i_nlink = i_nlink;
 
 	/* no compression for all dirs */
 	dir->datalayout = EROFS_INODE_FLAT_INLINE;
@@ -729,8 +746,19 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	inode->i_mode = st->st_mode;
 	inode->i_uid = st->st_uid;
 	inode->i_gid = st->st_gid;
-	inode->i_ctime = sbi.build_time;
-	inode->i_ctime_nsec = sbi.build_time_nsec;
+	inode->i_ctime = st->st_ctime;
+	inode->i_ctime_nsec = st->st_ctim.tv_nsec;
+
+	switch (cfg.c_timeinherit) {
+	case TIMESTAMP_CLAMPING:
+		if (st->st_ctime < sbi.build_time)
+			break;
+	case TIMESTAMP_FIXED:
+		inode->i_ctime = sbi.build_time;
+		inode->i_ctime_nsec = sbi.build_time_nsec;
+	default:
+		break;
+	}
 	inode->i_nlink = 1;	/* fix up later if needed */
 
 	switch (inode->i_mode & S_IFMT) {
@@ -753,6 +781,7 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	strncpy(inode->i_srcpath, path, sizeof(inode->i_srcpath) - 1);
 	inode->i_srcpath[sizeof(inode->i_srcpath) - 1] = '\0';
 
+	inode->dev = st->st_dev;
 	inode->i_ino[1] = st->st_ino;
 
 	if (erofs_should_use_inode_extended(inode)) {
@@ -767,7 +796,8 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	}
 
 	list_add(&inode->i_hash,
-		 &inode_hashtable[st->st_ino % NR_INODE_HASHTABLE]);
+		 &inode_hashtable[(st->st_ino ^ st->st_dev) %
+				  NR_INODE_HASHTABLE]);
 	return 0;
 }
 
@@ -812,9 +842,16 @@ struct erofs_inode *erofs_iget_from_path(const char *path, bool is_src)
 	if (ret)
 		return ERR_PTR(-errno);
 
-	inode = erofs_iget(st.st_ino);
-	if (inode)
-		return inode;
+	/*
+	 * lookup in hash table first, if it already exists we have a
+	 * hard-link, just return it. Also don't lookup for directories
+	 * since hard-link directory isn't allowed.
+	 */
+	if (!S_ISDIR(st.st_mode)) {
+		inode = erofs_iget(st.st_dev, st.st_ino);
+		if (inode)
+			return inode;
+	}
 
 	/* cannot find in the inode cache */
 	inode = erofs_new_inode();
@@ -897,7 +934,9 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 			if (ret)
 				return ERR_PTR(ret);
 		} else {
-			erofs_write_file(dir);
+			ret = erofs_write_file(dir);
+			if (ret)
+				return ERR_PTR(ret);
 		}
 
 		erofs_prepare_inode_buffer(dir);
@@ -935,6 +974,10 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 			ret = PTR_ERR(d);
 			goto err_closedir;
 		}
+
+		/* to count i_nlink for directories */
+		d->type = (dp->d_type == DT_DIR ?
+			EROFS_FT_DIR : EROFS_FT_UNKNOWN);
 	}
 
 	if (errno) {
@@ -945,17 +988,18 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 
 	ret = erofs_prepare_dir_file(dir);
 	if (ret)
-		goto err_closedir;
+		goto err;
 
 	ret = erofs_prepare_inode_buffer(dir);
 	if (ret)
-		goto err_closedir;
+		goto err;
 
 	if (IS_ROOT(dir))
 		erofs_fixup_meta_blkaddr(dir);
 
 	list_for_each_entry(d, &dir->i_subdirs, d_child) {
 		char buf[PATH_MAX];
+		unsigned char ftype;
 
 		if (is_dot_dotdot(d->name)) {
 			erofs_d_invalidate(d);
@@ -971,13 +1015,17 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 
 		d->inode = erofs_mkfs_build_tree_from_path(dir, buf);
 		if (IS_ERR(d->inode)) {
+			ret = PTR_ERR(d->inode);
 fail:
 			d->inode = NULL;
 			d->type = EROFS_FT_UNKNOWN;
-			continue;
+			goto err;
 		}
 
-		d->type = erofs_type_by_mode[d->inode->i_mode >> S_SHIFT];
+		ftype = erofs_mode_to_ftype(d->inode->i_mode);
+		DBG_BUGON(ftype == EROFS_FT_DIR && d->type != ftype);
+		d->type = ftype;
+
 		erofs_d_invalidate(d);
 		erofs_info("add file %s/%s (nid %llu, type %d)",
 			   dir->i_srcpath, d->name, (unsigned long long)d->nid,
@@ -989,6 +1037,7 @@ fail:
 
 err_closedir:
 	closedir(_dir);
+err:
 	return ERR_PTR(ret);
 }
 

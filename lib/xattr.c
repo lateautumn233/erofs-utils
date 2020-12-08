@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs_utils/lib/xattr.c
+ * erofs-utils/lib/xattr.c
  *
  * Originally contributed by an anonymous person,
  * heavily changed by Li Guifu <blucerlee@gmail.com>
@@ -18,6 +18,7 @@
 #include "erofs/hashtable.h"
 #include "erofs/xattr.h"
 #include "erofs/cache.h"
+#include "erofs/io.h"
 
 #define EA_HASHTABLE_BITS 16
 
@@ -506,8 +507,9 @@ static void erofs_cleanxattrs(bool sharedxattrs)
 {
 	unsigned int i;
 	struct xattr_item *item;
+	struct hlist_node *tmp;
 
-	hash_for_each(ea_hashtable, i, item, node) {
+	hash_for_each_safe(ea_hashtable, i, tmp, item, node) {
 		if (sharedxattrs && item->shared_xattr_id >= 0)
 			continue;
 
@@ -520,6 +522,21 @@ static void erofs_cleanxattrs(bool sharedxattrs)
 
 	shared_xattrs_size = shared_xattrs_count = 0;
 }
+
+static bool erofs_bh_flush_write_shared_xattrs(struct erofs_buffer_head *bh)
+{
+	void *buf = bh->fsprivate;
+	int err = dev_write(buf, erofs_btell(bh, false), shared_xattrs_size);
+
+	if (err)
+		return false;
+	free(buf);
+	return erofs_bh_flush_generic_end(bh);
+}
+
+static struct erofs_bhops erofs_write_shared_xattrs_bhops = {
+	.flush = erofs_bh_flush_write_shared_xattrs,
+};
 
 int erofs_build_shared_xattrs_from_path(const char *path)
 {
@@ -547,7 +564,7 @@ int erofs_build_shared_xattrs_from_path(const char *path)
 	if (!shared_xattrs_size)
 		goto out;
 
-	buf = malloc(shared_xattrs_size);
+	buf = calloc(1, shared_xattrs_size);
 	if (!buf)
 		return -ENOMEM;
 
@@ -585,7 +602,7 @@ int erofs_build_shared_xattrs_from_path(const char *path)
 		free(node);
 	}
 	bh->fsprivate = buf;
-	bh->op = &erofs_buf_write_bhops;
+	bh->op = &erofs_write_shared_xattrs_bhops;
 out:
 	erofs_cleanxattrs(true);
 	return 0;

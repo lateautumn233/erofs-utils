@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * erofs_utils/include/erofs/defs.h
+ * erofs-utils/include/erofs/defs.h
  *
  * Copyright (C) 2018 HUAWEI, Inc.
  *             http://www.huawei.com/
@@ -169,6 +169,11 @@ typedef int64_t         s64;
 #ifndef __maybe_unused
 #define __maybe_unused      __attribute__((__unused__))
 #endif
+
+static inline u32 get_unaligned_le32(const u8 *p)
+{
+	return p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24;
+}
 
 #endif
 
