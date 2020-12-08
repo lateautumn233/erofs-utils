@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * erofs_utils/include/erofs/config.h
+ * erofs-utils/include/erofs/config.h
  *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
@@ -29,11 +29,18 @@ enum {
 	FORCE_INODE_EXTENDED,
 };
 
+enum {
+	TIMESTAMP_NONE,
+	TIMESTAMP_FIXED,
+	TIMESTAMP_CLAMPING,
+};
+
 struct erofs_configure {
 	const char *c_version;
 	int c_dbg_lvl;
 	bool c_dry_run;
 	bool c_legacy_compress;
+	char c_timeinherit;
 
 #ifdef HAVE_LIBSELINUX
 	struct selabel_handle *sehnd;
