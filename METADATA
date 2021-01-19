@@ -3,7 +3,7 @@ description: "EROFS Utilities"
 third_party {
   url {
     type: GIT
-    value: "https://github.com/hsiangkao/erofs-utils"
+    value: "https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git"
   }
   version: "v1.2"
   license_type: RESTRICTED
