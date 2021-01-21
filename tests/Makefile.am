@@ -67,6 +67,8 @@ TESTS += erofs/013
 # 014 - check if cross-device submounts are handled properly
 TESTS += erofs/014
 
+# 015 - regression test for battach on full buffer block
+TESTS += erofs/015
 
 EXTRA_DIST = common/rc erofs
 
