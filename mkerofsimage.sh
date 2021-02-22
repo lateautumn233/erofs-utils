@@ -5,7 +5,7 @@
 function usage() {
 cat<<EOT
 Usage:
-${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR]
+${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR] [-T TIMESTAMP] [-U UUID]
 EOT
 }
 
@@ -60,6 +60,18 @@ if [[ "$1" == "-z" ]]; then
     shift; shift
 fi
 
+TIMESTAMP=
+if [[ "$1" == "-T" ]]; then
+    TIMESTAMP=$2
+    shift; shift
+fi
+
+UUID=
+if [[ "$1" == "-U" ]]; then
+    UUID=$2
+    shift; shift
+fi
+
 OPT=""
 if [ -n "$MOUNT_POINT" ]; then
   OPT="$OPT --mount-point $MOUNT_POINT"
@@ -72,6 +84,12 @@ if [ -n "$FS_CONFIG" ]; then
 fi
 if [ -n "$FILE_CONTEXTS" ]; then
   OPT="$OPT --file-contexts $FILE_CONTEXTS"
+fi
+if [ -n "$TIMESTAMP" ]; then
+  OPT="$OPT -T $TIMESTAMP"
+fi
+if [ -n "$UUID" ]; then
+  OPT="$OPT -U $UUID"
 fi
 
 MAKE_EROFS_CMD="mkfs.erofs -z $COMPRESSOR $OPT $OUTPUT_FILE $SRC_DIR"
