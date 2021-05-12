@@ -44,6 +44,13 @@ license {
     ],
 }
 
+genrule {
+    name: "erofs-utils-version.h",
+    srcs: ["VERSION"],
+    out: ["erofs-utils-version.h"],
+    cmd: "sed -n '1p' $(in) | tr -d '\n' | sed 's/\\(.*\\)/#define PACKAGE_VERSION \"\\1\"/' > $(out)",
+}
+
 cc_defaults {
     name: "erofs-utils_defaults",
 
@@ -53,7 +60,7 @@ cc_defaults {
         "-Wno-ignored-qualifiers",
         "-Wno-pointer-arith",
         "-Wno-unused-parameter",
-        "-DPACKAGE_VERSION=\"1.1\"",
+        "-include erofs-utils-version.h",
         "-DHAVE_FALLOCATE",
         "-DHAVE_LINUX_TYPES_H",
         "-DHAVE_LIBSELINUX",
@@ -68,6 +75,7 @@ cc_defaults {
     include_dirs: [
         "external/e2fsprogs/lib/",
     ],
+    generated_headers: ["erofs-utils-version.h"],
     shared_libs: [
         "libcutils",
         "libext2_uuid",
