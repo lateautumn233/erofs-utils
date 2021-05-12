@@ -5,7 +5,7 @@ third_party {
     type: GIT
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git"
   }
-  version: "v1.2"
+  version: "v1.2.1"
   license_type: RESTRICTED
   last_upgrade_date {
     year: 2020
