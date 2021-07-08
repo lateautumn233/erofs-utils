@@ -96,21 +96,6 @@ unsigned int erofs_iput(struct erofs_inode *inode)
 	return 0;
 }
 
-static int dentry_add_sorted(struct erofs_dentry *d, struct list_head *head)
-{
-	struct list_head *pos;
-
-	list_for_each(pos, head) {
-		struct erofs_dentry *d2 =
-			container_of(pos, struct erofs_dentry, d_child);
-
-		if (strcmp(d->name, d2->name) < 0)
-			break;
-	}
-	list_add_tail(&d->d_child, pos);
-	return 0;
-}
-
 struct erofs_dentry *erofs_d_alloc(struct erofs_inode *parent,
 				   const char *name)
 {
@@ -122,7 +107,7 @@ struct erofs_dentry *erofs_d_alloc(struct erofs_inode *parent,
 	strncpy(d->name, name, EROFS_NAME_LEN - 1);
 	d->name[EROFS_NAME_LEN - 1] = '\0';
 
-	dentry_add_sorted(d, &parent->i_subdirs);
+	list_add_tail(&d->d_child, &parent->i_subdirs);
 	return d;
 }
 
@@ -148,7 +133,7 @@ static int __allocate_inode_bh_data(struct erofs_inode *inode,
 	inode->bh_data = bh;
 
 	/* get blkaddr of the bh */
-	ret = erofs_mapbh(bh->block, true);
+	ret = erofs_mapbh(bh->block);
 	DBG_BUGON(ret < 0);
 
 	/* write blocks except for the tail-end block */
@@ -156,10 +141,19 @@ static int __allocate_inode_bh_data(struct erofs_inode *inode,
 	return 0;
 }
 
-int erofs_prepare_dir_file(struct erofs_inode *dir)
+static int comp_subdir(const void *a, const void *b)
 {
-	struct erofs_dentry *d;
-	unsigned int d_size, i_nlink;
+	const struct erofs_dentry *da, *db;
+
+	da = *((const struct erofs_dentry **)a);
+	db = *((const struct erofs_dentry **)b);
+	return strcmp(da->name, db->name);
+}
+
+int erofs_prepare_dir_file(struct erofs_inode *dir, unsigned int nr_subdirs)
+{
+	struct erofs_dentry *d, *n, **sorted_d;
+	unsigned int d_size, i_nlink, i;
 	int ret;
 
 	/* dot is pointed to the current dir inode */
@@ -171,6 +165,22 @@ int erofs_prepare_dir_file(struct erofs_inode *dir)
 	d = erofs_d_alloc(dir, "..");
 	d->inode = erofs_igrab(dir->i_parent);
 	d->type = EROFS_FT_DIR;
+
+	/* sort subdirs */
+	nr_subdirs += 2;
+	sorted_d = malloc(nr_subdirs * sizeof(d));
+	if (!sorted_d)
+		return -ENOMEM;
+	i = 0;
+	list_for_each_entry_safe(d, n, &dir->i_subdirs, d_child) {
+		list_del(&d->d_child);
+		sorted_d[i++] = d;
+	}
+	DBG_BUGON(i != nr_subdirs);
+	qsort(sorted_d, nr_subdirs, sizeof(d), comp_subdir);
+	for (i = 0; i < nr_subdirs; i++)
+		list_add_tail(&sorted_d[i]->d_child, &dir->i_subdirs);
+	free(sorted_d);
 
 	/* let's calculate dir size and update i_nlink */
 	d_size = 0;
@@ -412,7 +422,7 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 		u.dic.i_uid = cpu_to_le16((u16)inode->i_uid);
 		u.dic.i_gid = cpu_to_le16((u16)inode->i_gid);
 
-		switch ((inode->i_mode) >> S_SHIFT) {
+		switch (inode->i_mode & S_IFMT) {
 		case S_IFCHR:
 		case S_IFBLK:
 		case S_IFIFO:
@@ -445,7 +455,7 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 		u.die.i_ctime = cpu_to_le64(inode->i_ctime);
 		u.die.i_ctime_nsec = cpu_to_le32(inode->i_ctime_nsec);
 
-		switch ((inode->i_mode) >> S_SHIFT) {
+		switch (inode->i_mode & S_IFMT) {
 		case S_IFCHR:
 		case S_IFBLK:
 		case S_IFIFO:
@@ -522,7 +532,7 @@ int erofs_prepare_tail_block(struct erofs_inode *inode)
 		bh->op = &erofs_skip_write_bhops;
 
 		/* get blkaddr of bh */
-		ret = erofs_mapbh(bh->block, true);
+		ret = erofs_mapbh(bh->block);
 		DBG_BUGON(ret < 0);
 		inode->u.i_blkaddr = bh->block->blkaddr;
 
@@ -531,7 +541,7 @@ int erofs_prepare_tail_block(struct erofs_inode *inode)
 	}
 	/* expend a block as the tail block (should be successful) */
 	ret = erofs_bh_balloon(bh, EROFS_BLKSIZ);
-	DBG_BUGON(ret);
+	DBG_BUGON(ret != EROFS_BLKSIZ);
 	return 0;
 }
 
@@ -632,7 +642,7 @@ int erofs_write_tail_end(struct erofs_inode *inode)
 		int ret;
 		erofs_off_t pos;
 
-		erofs_mapbh(bh->block, true);
+		erofs_mapbh(bh->block);
 		pos = erofs_btell(bh, true) - EROFS_BLKSIZ;
 		ret = dev_write(inode->idata, pos, inode->idata_size);
 		if (ret)
@@ -752,8 +762,8 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	if (err)
 		return err;
 	inode->i_mode = st->st_mode;
-	inode->i_uid = st->st_uid;
-	inode->i_gid = st->st_gid;
+	inode->i_uid = cfg.c_uid == -1 ? st->st_uid : cfg.c_uid;
+	inode->i_gid = cfg.c_gid == -1 ? st->st_gid : cfg.c_gid;
 	inode->i_ctime = st->st_ctime;
 	inode->i_ctime_nsec = st->st_ctim.tv_nsec;
 
@@ -867,8 +877,10 @@ struct erofs_inode *erofs_iget_from_path(const char *path, bool is_src)
 		return inode;
 
 	ret = erofs_fill_inode(inode, &st, path);
-	if (ret)
+	if (ret) {
+		free(inode);
 		return ERR_PTR(ret);
+	}
 
 	return inode;
 }
@@ -879,7 +891,7 @@ void erofs_fixup_meta_blkaddr(struct erofs_inode *rootdir)
 	struct erofs_buffer_head *const bh = rootdir->bh;
 	erofs_off_t off, meta_offset;
 
-	erofs_mapbh(bh->block, true);
+	erofs_mapbh(bh->block);
 	off = erofs_btell(bh, false);
 
 	if (off > rootnid_maxoffset)
@@ -898,7 +910,7 @@ erofs_nid_t erofs_lookupnid(struct erofs_inode *inode)
 	if (!bh)
 		return inode->nid;
 
-	erofs_mapbh(bh->block, true);
+	erofs_mapbh(bh->block);
 	off = erofs_btell(bh, false);
 
 	meta_offset = blknr_to_addr(sbi.meta_blkaddr);
@@ -920,6 +932,7 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 	DIR *_dir;
 	struct dirent *dp;
 	struct erofs_dentry *d;
+	unsigned int nr_subdirs;
 
 	ret = erofs_prepare_xattr_ibody(dir);
 	if (ret < 0)
@@ -954,11 +967,12 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 
 	_dir = opendir(dir->i_srcpath);
 	if (!_dir) {
-		erofs_err("%s, failed to opendir at %s: %s",
-			  __func__, dir->i_srcpath, erofs_strerror(errno));
+		erofs_err("failed to opendir at %s: %s",
+			  dir->i_srcpath, erofs_strerror(errno));
 		return ERR_PTR(-errno);
 	}
 
+	nr_subdirs = 0;
 	while (1) {
 		/*
 		 * set errno to 0 before calling readdir() in order to
@@ -982,6 +996,7 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 			ret = PTR_ERR(d);
 			goto err_closedir;
 		}
+		nr_subdirs++;
 
 		/* to count i_nlink for directories */
 		d->type = (dp->d_type == DT_DIR ?
@@ -994,7 +1009,7 @@ struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 	}
 	closedir(_dir);
 
-	ret = erofs_prepare_dir_file(dir);
+	ret = erofs_prepare_dir_file(dir, nr_subdirs);
 	if (ret)
 		goto err;
 
