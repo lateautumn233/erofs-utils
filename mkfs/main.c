@@ -36,6 +36,13 @@ static struct option long_options[] = {
 #ifdef HAVE_LIBSELINUX
 	{"file-contexts", required_argument, NULL, 4},
 #endif
+	{"force-uid", required_argument, NULL, 5},
+	{"force-gid", required_argument, NULL, 6},
+	{"all-root", no_argument, NULL, 7},
+#ifndef NDEBUG
+	{"random-pclusterblks", no_argument, NULL, 8},
+#endif
+	{"max-extent-bytes", required_argument, NULL, 9},
 #ifdef WITH_ANDROID
 	{"mount-point", required_argument, NULL, 10},
 	{"product-out", required_argument, NULL, 11},
@@ -61,25 +68,33 @@ static void usage(void)
 {
 	fputs("usage: [options] FILE DIRECTORY\n\n"
 	      "Generate erofs image from DIRECTORY to FILE, and [options] are:\n"
-	      " -zX[,Y]            X=compressor (Y=compression level, optional)\n"
-	      " -d#                set output message level to # (maximum 9)\n"
-	      " -x#                set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
-	      " -EX[,...]          X=extended options\n"
-	      " -T#                set a fixed UNIX timestamp # to all files\n"
+	      " -zX[,Y]               X=compressor (Y=compression level, optional)\n"
+	      " -C#                   specify the size of compress physical cluster in bytes\n"
+	      " -d#                   set output message level to # (maximum 9)\n"
+	      " -x#                   set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
+	      " -EX[,...]             X=extended options\n"
+	      " -T#                   set a fixed UNIX timestamp # to all files\n"
 #ifdef HAVE_LIBUUID
-	      " -UX                use a given filesystem UUID\n"
+	      " -UX                   use a given filesystem UUID\n"
 #endif
-	      " --exclude-path=X   avoid including file X (X = exact literal path)\n"
-	      " --exclude-regex=X  avoid including files that match X (X = regular expression)\n"
+	      " --exclude-path=X      avoid including file X (X = exact literal path)\n"
+	      " --exclude-regex=X     avoid including files that match X (X = regular expression)\n"
 #ifdef HAVE_LIBSELINUX
-	      " --file-contexts=X  specify a file contexts file to setup selinux labels\n"
+	      " --file-contexts=X     specify a file contexts file to setup selinux labels\n"
 #endif
-	      " --help             display this help and exit\n"
+	      " --force-uid=#         set all file uids to # (# = UID)\n"
+	      " --force-gid=#         set all file gids to # (# = GID)\n"
+	      " --all-root            make all files owned by root\n"
+	      " --help                display this help and exit\n"
+	      " --max-extent-bytes=#  set maximum decompressed extent size # in bytes\n"
+#ifndef NDEBUG
+	      " --random-pclusterblks randomize pclusterblks for big pcluster (debugging only)\n"
+#endif
 #ifdef WITH_ANDROID
 	      "\nwith following android-specific options:\n"
-	      " --mount-point=X    X=prefix of target fs path (default: /)\n"
-	      " --product-out=X    X=product_out directory\n"
-	      " --fs-config-file=X X=fs_config file\n"
+	      " --mount-point=X       X=prefix of target fs path (default: /)\n"
+	      " --product-out=X       X=product_out directory\n"
+	      " --fs-config-file=X    X=fs_config file\n"
 #endif
 	      "\nAvailable compressors are: ", stderr);
 	print_available_compressors(stderr, ", ");
@@ -152,7 +167,7 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 	char *endptr;
 	int opt, i;
 
-	while((opt = getopt_long(argc, argv, "d:x:z:E:T:U:",
+	while((opt = getopt_long(argc, argv, "d:x:z:E:T:U:C:",
 				 long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'z':
@@ -233,6 +248,37 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 			if (opt && opt != -EBUSY)
 				return opt;
 			break;
+		case 5:
+			cfg.c_uid = strtoul(optarg, &endptr, 0);
+			if (cfg.c_uid == -1 || *endptr != '\0') {
+				erofs_err("invalid uid %s", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 6:
+			cfg.c_gid = strtoul(optarg, &endptr, 0);
+			if (cfg.c_gid == -1 || *endptr != '\0') {
+				erofs_err("invalid gid %s", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 7:
+			cfg.c_uid = cfg.c_gid = 0;
+			break;
+#ifndef NDEBUG
+		case 8:
+			cfg.c_random_pclusterblks = true;
+			break;
+#endif
+		case 9:
+			cfg.c_max_decompressed_extent_bytes =
+				strtoul(optarg, &endptr, 0);
+			if (*endptr != '\0') {
+				erofs_err("invalid maximum uncompressed extent size %s",
+					  optarg);
+				return -EINVAL;
+			}
+			break;
 #ifdef WITH_ANDROID
 		case 10:
 			cfg.mount_point = optarg;
@@ -248,6 +294,17 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 			cfg.fs_config_file = optarg;
 			break;
 #endif
+		case 'C':
+			i = strtoull(optarg, &endptr, 0);
+			if (*endptr != '\0' ||
+			    i < EROFS_BLKSIZ || i % EROFS_BLKSIZ) {
+				erofs_err("invalid physical clustersize %s",
+					  optarg);
+				return -EINVAL;
+			}
+			cfg.c_physical_clusterblks = i / EROFS_BLKSIZ;
+			break;
+
 		case 1:
 			usage();
 			exit(0);
@@ -304,10 +361,15 @@ int erofs_mkfs_update_super_block(struct erofs_buffer_head *bh,
 		round_up(EROFS_SUPER_END, EROFS_BLKSIZ);
 	char *buf;
 
-	*blocks         = erofs_mapbh(NULL, true);
+	*blocks         = erofs_mapbh(NULL);
 	sb.blocks       = cpu_to_le32(*blocks);
 	sb.root_nid     = cpu_to_le16(root_nid);
 	memcpy(sb.uuid, sbi.uuid, sizeof(sb.uuid));
+
+	if (erofs_sb_has_compr_cfgs())
+		sb.u1.available_compr_algs = sbi.available_compr_algs;
+	else
+		sb.u1.lz4_max_distance = cpu_to_le16(sbi.lz4_max_distance);
 
 	buf = calloc(sb_blksize, 1);
 	if (!buf) {
@@ -483,7 +545,10 @@ int main(int argc, char **argv)
 
 	erofs_show_config();
 	erofs_set_fs_root(cfg.c_src_path);
-
+#ifndef NDEBUG
+	if (cfg.c_random_pclusterblks)
+		srand(time(NULL));
+#endif
 	sb_bh = erofs_buffer_init();
 	if (IS_ERR(sb_bh)) {
 		err = PTR_ERR(sb_bh);
@@ -498,7 +563,7 @@ int main(int argc, char **argv)
 		goto exit;
 	}
 
-	err = z_erofs_compress_init();
+	err = z_erofs_compress_init(sb_bh);
 	if (err) {
 		erofs_err("Failed to initialize compressor: %s",
 			  erofs_strerror(err));
