@@ -79,6 +79,9 @@ struct erofs_sb_info {
 	u64 inos;
 
 	u8 uuid[16];
+
+	u16 available_compr_algs;
+	u16 lz4_max_distance;
 };
 
 /* global sbi */
@@ -104,6 +107,8 @@ static inline void erofs_sb_clear_##name(void) \
 }
 
 EROFS_FEATURE_FUNCS(lz4_0padding, incompat, INCOMPAT_LZ4_0PADDING)
+EROFS_FEATURE_FUNCS(compr_cfgs, incompat, INCOMPAT_COMPR_CFGS)
+EROFS_FEATURE_FUNCS(big_pcluster, incompat, INCOMPAT_BIG_PCLUSTER)
 EROFS_FEATURE_FUNCS(sb_chksum, compat, COMPAT_SB_CHKSUM)
 
 #define EROFS_I_EA_INITED	(1 << 0)
@@ -159,7 +164,6 @@ struct erofs_inode {
 			uint16_t z_advise;
 			uint8_t  z_algorithmtype[2];
 			uint8_t  z_logical_clusterbits;
-			uint8_t  z_physical_clusterbits[2];
 		};
 	};
 #ifdef WITH_ANDROID
