@@ -21,8 +21,6 @@
 #include "erofs/block_list.h"
 
 static struct erofs_compress compresshandle;
-static int compressionlevel;
-
 static unsigned int algorithmtype[2];
 
 struct z_erofs_vle_compress_ctx {
@@ -186,8 +184,7 @@ static int vle_compress_one(struct erofs_inode *inode,
 		}
 
 		count = min(len, cfg.c_max_decompressed_extent_bytes);
-		ret = erofs_compress_destsize(h, compressionlevel,
-					      ctx->queue + ctx->head,
+		ret = erofs_compress_destsize(h, ctx->queue + ctx->head,
 					      &count, dst, pclustersize);
 		if (ret <= 0) {
 			if (ret != -EAGAIN) {
@@ -642,9 +639,9 @@ int z_erofs_compress_init(struct erofs_buffer_head *sb_bh)
 	if (!cfg.c_compr_alg_master)
 		return 0;
 
-	compressionlevel = cfg.c_compr_level_master < 0 ?
-		compresshandle.alg->default_level :
-		cfg.c_compr_level_master;
+	ret = erofs_compressor_setlevel(&compresshandle, cfg.c_compr_level_master);
+	if (ret)
+		return ret;
 
 	/* figure out primary algorithm */
 	ret = erofs_get_compress_algorithm_id(cfg.c_compr_alg_master);

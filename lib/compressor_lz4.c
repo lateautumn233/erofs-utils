@@ -15,7 +15,6 @@
 #endif
 
 static int lz4_compress_destsize(struct erofs_compress *c,
-				 int compression_level,
 				 void *src, unsigned int *srcsize,
 				 void *dst, unsigned int dstsize)
 {
