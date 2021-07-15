@@ -24,8 +24,13 @@ from \fISOURCE\fR directory.
 Set an algorithm for file compression, which can be set with an optional
 compression level separated by a comma.
 .TP
+.BI "\-C " max-pcluster-size
+Specify the maximum size of compress physical cluster in bytes. It may enable
+big pcluster feature if needed (Linux v5.13+).
+.TP
 .BI "\-d " #
-Specify the level of debugging messages. The default is 0.
+Specify the level of debugging messages. The default is 2, which shows basic
+warning messages.
 .TP
 .BI "\-x " #
 Specify the upper limit of an xattr which is still inlined. The default is 2.
@@ -69,8 +74,20 @@ You may give multiple `--exclude-regex` options.
 .BI "\-\-file-contexts=" file
 Specify a \fIfile_contexts\fR file to setup / override selinux labels.
 .TP
+.BI "\-\-force-uid=" UID
+Set all file uids to \fIUID\fR.
+.TP
+.BI "\-\-force-gid=" GID
+Set all file gids to \fIGID\fR.
+.TP
+.B \-\-all-root
+Make all files owned by root.
+.TP
 .B \-\-help
 Display this help and exit.
+.TP
+.B \-\-max-extent-bytes #
+Specify maximum decompressed extent size # in bytes.
 .SH AUTHOR
 This version of \fBmkfs.erofs\fR is written by Li Guifu <blucerlee@gmail.com>,
 Miao Xie <miaoxie@huawei.com> and Gao Xiang <xiang@kernel.org> with
