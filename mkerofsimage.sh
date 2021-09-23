@@ -60,6 +60,12 @@ if [[ "$1" == "-z" ]]; then
     shift; shift
 fi
 
+if [[ "$COMPRESSOR" == "none" ]]; then
+    COMPRESS_ARGS=
+else
+    COMPRESS_ARGS="-z ${COMPRESSOR}"
+fi
+
 TIMESTAMP=
 if [[ "$1" == "-T" ]]; then
     TIMESTAMP=$2
@@ -92,7 +98,7 @@ if [ -n "$UUID" ]; then
   OPT="$OPT -U $UUID"
 fi
 
-MAKE_EROFS_CMD="mkfs.erofs -z $COMPRESSOR $OPT $OUTPUT_FILE $SRC_DIR"
+MAKE_EROFS_CMD="mkfs.erofs $COMPRESS_ARGS $OPT $OUTPUT_FILE $SRC_DIR"
 echo $MAKE_EROFS_CMD
 $MAKE_EROFS_CMD
 
