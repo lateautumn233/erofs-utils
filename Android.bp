@@ -86,8 +86,8 @@ cc_defaults {
     ],
 }
 
-cc_binary_host {
-    name: "mkfs.erofs",
+cc_defaults {
+    name: "mkfs-erofs_defaults",
 
     defaults: ["erofs-utils_defaults"],
 
@@ -101,6 +101,18 @@ cc_binary_host {
             enabled: false,
         },
     },
+}
+
+cc_binary_host {
+    name: "mkfs.erofs",
+
+    defaults: ["mkfs-erofs_defaults"],
+}
+
+cc_binary_host {
+    name: "make_erofs",
+
+    defaults: ["mkfs-erofs_defaults"],
 }
 
 sh_binary_host {
