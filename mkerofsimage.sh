@@ -5,7 +5,7 @@
 function usage() {
 cat<<EOT
 Usage:
-${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR] [-T TIMESTAMP] [-U UUID]
+${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR] [-T TIMESTAMP] [-U UUID] [-B BLOCK_MAP]
 EOT
 }
 
@@ -78,6 +78,12 @@ if [[ "$1" == "-U" ]]; then
     shift; shift
 fi
 
+BLOCK_MAP=
+if [[ "$1" == "-B" ]]; then
+    BLOCK_MAP=$2
+    shift; shift;
+fi
+
 OPT=""
 if [ -n "$MOUNT_POINT" ]; then
   OPT="$OPT --mount-point $MOUNT_POINT"
@@ -96,6 +102,9 @@ if [ -n "$TIMESTAMP" ]; then
 fi
 if [ -n "$UUID" ]; then
   OPT="$OPT -U $UUID"
+fi
+if [ -n "$BLOCK_MAP" ]; then
+  OPT="$OPT --block-list-file=$BLOCK_MAP"
 fi
 
 MAKE_EROFS_CMD="mkfs.erofs $COMPRESS_ARGS $OPT $OUTPUT_FILE $SRC_DIR"
