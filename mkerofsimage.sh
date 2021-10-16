@@ -5,7 +5,7 @@
 function usage() {
 cat<<EOT
 Usage:
-${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR] [-T TIMESTAMP] [-U UUID] [-B BLOCK_MAP]
+${0##*/} SRC_DIR OUTPUT_FILE [-s] [-m MOUNT_POINT] [-d PRODUCT_OUT] [-C FS_CONFIG ] [-c FILE_CONTEXTS] [-z COMPRESSOR] [-T TIMESTAMP] [-U UUID] [-B BLOCK_MAP] [-P PCLUSTER_SIZE] [-k CHUNK_SIZE]
 EOT
 }
 
@@ -84,6 +84,18 @@ if [[ "$1" == "-B" ]]; then
     shift; shift;
 fi
 
+PCLUSTER_SIZE=
+if [[ "$1" == "-P" ]]; then
+    PCLUSTER_SIZE=$2
+    shift; shift;
+fi
+
+CHUNK_SIZE=
+if [[ "$1" == "-k" ]]; then
+    CHUNK_SIZE=$2
+    shift; shift;
+fi
+
 OPT=""
 if [ -n "$MOUNT_POINT" ]; then
   OPT="$OPT --mount-point $MOUNT_POINT"
@@ -105,6 +117,12 @@ if [ -n "$UUID" ]; then
 fi
 if [ -n "$BLOCK_MAP" ]; then
   OPT="$OPT --block-list-file=$BLOCK_MAP"
+fi
+if [ -n "$PCLUSTER_SIZE" ]; then
+  OPT="$OPT -C${PCLUSTER_SIZE}"
+fi
+if [ -n "$CHUNK_SIZE" ]; then
+  OPT="$OPT --chunksize=$CHUNK_SIZE"
 fi
 
 MAKE_EROFS_CMD="mkfs.erofs $COMPRESS_ARGS $OPT $OUTPUT_FILE $SRC_DIR"
