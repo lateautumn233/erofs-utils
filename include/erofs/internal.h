@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * erofs-utils/include/erofs/internal.h
- *
  * Copyright (C) 2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Gao Xiang <gaoxiang25@huawei.com>
@@ -36,7 +34,9 @@ typedef unsigned short umode_t;
 #error incompatible PAGE_SIZE is already defined
 #endif
 
+#ifndef PAGE_MASK
 #define PAGE_MASK		(~(PAGE_SIZE-1))
+#endif
 
 #define LOG_BLOCK_SIZE          (12)
 #define EROFS_BLKSIZ            (1U << LOG_BLOCK_SIZE)
@@ -109,6 +109,7 @@ static inline void erofs_sb_clear_##name(void) \
 EROFS_FEATURE_FUNCS(lz4_0padding, incompat, INCOMPAT_LZ4_0PADDING)
 EROFS_FEATURE_FUNCS(compr_cfgs, incompat, INCOMPAT_COMPR_CFGS)
 EROFS_FEATURE_FUNCS(big_pcluster, incompat, INCOMPAT_BIG_PCLUSTER)
+EROFS_FEATURE_FUNCS(chunked_file, incompat, INCOMPAT_CHUNKED_FILE)
 EROFS_FEATURE_FUNCS(sb_chksum, compat, COMPAT_SB_CHKSUM)
 
 #define EROFS_I_EA_INITED	(1 << 0)
@@ -140,6 +141,10 @@ struct erofs_inode {
 		u32 i_blkaddr;
 		u32 i_blocks;
 		u32 i_rdev;
+		struct {
+			unsigned short	chunkformat;
+			unsigned char	chunkbits;
+		};
 	} u;
 
 	char i_srcpath[PATH_MAX + 1];
@@ -160,10 +165,12 @@ struct erofs_inode {
 
 	union {
 		void *compressmeta;
+		void *chunkindexes;
 		struct {
 			uint16_t z_advise;
 			uint8_t  z_algorithmtype[2];
 			uint8_t  z_logical_clusterbits;
+			uint8_t  z_physical_clusterblks;
 		};
 	};
 #ifdef WITH_ANDROID
@@ -266,7 +273,9 @@ int z_erofs_fill_inode(struct erofs_inode *vi);
 int z_erofs_map_blocks_iter(struct erofs_inode *vi,
 			    struct erofs_map_blocks *map);
 
+#ifdef EUCLEAN
 #define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
-
+#else
+#define EFSCORRUPTED	EIO
 #endif
-
+#endif
