@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/lib/compressor-lz4.c
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Gao Xiang <gaoxiang25@huawei.com>
@@ -15,7 +13,6 @@
 #endif
 
 static int lz4_compress_destsize(struct erofs_compress *c,
-				 int compression_level,
 				 void *src, unsigned int *srcsize,
 				 void *dst, unsigned int dstsize)
 {
@@ -48,4 +45,3 @@ struct erofs_compressor erofs_compressor_lz4 = {
 	.exit = compressor_lz4_exit,
 	.compress_destsize = lz4_compress_destsize,
 };
-
