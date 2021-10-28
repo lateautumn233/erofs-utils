@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/lib/inode.c
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Li Guifu <bluce.liguifu@huawei.com>
@@ -12,7 +10,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <config.h>
+#if defined(HAVE_SYS_SYSMACROS_H)
 #include <sys/sysmacros.h>
+#endif
 #include <dirent.h>
 #include "erofs/print.h"
 #include "erofs/inode.h"
@@ -21,6 +22,9 @@
 #include "erofs/compress.h"
 #include "erofs/xattr.h"
 #include "erofs/exclude.h"
+#include "erofs/block_list.h"
+#include "erofs/compress_hints.h"
+#include "erofs/blobchunk.h"
 
 #define S_SHIFT                 12
 static unsigned char erofs_ftype_by_mode[S_IFMT >> S_SHIFT] = {
@@ -119,7 +123,7 @@ static int __allocate_inode_bh_data(struct erofs_inode *inode,
 	int ret;
 
 	if (!nblocks) {
-		/* it has only tail-end inlined data */
+		/* it has only tail-end data */
 		inode->u.i_blkaddr = NULL_ADDR;
 		return 0;
 	}
@@ -251,7 +255,7 @@ static int write_dirblock(unsigned int q, struct erofs_dentry *head,
 	return blk_write(buf, blkaddr, 1);
 }
 
-int erofs_write_dir_file(struct erofs_inode *dir)
+static int erofs_write_dir_file(struct erofs_inode *dir)
 {
 	struct erofs_dentry *head = list_first_entry(&dir->i_subdirs,
 						     struct erofs_dentry,
@@ -298,7 +302,7 @@ int erofs_write_dir_file(struct erofs_inode *dir)
 	return 0;
 }
 
-int erofs_write_file_from_buffer(struct erofs_inode *inode, char *buf)
+static int erofs_write_file_from_buffer(struct erofs_inode *inode, char *buf)
 {
 	const unsigned int nblocks = erofs_blknr(inode->i_size);
 	int ret;
@@ -325,6 +329,8 @@ int erofs_write_file_from_buffer(struct erofs_inode *inode, char *buf)
 /* rules to decide whether a file could be compressed or not */
 static bool erofs_file_is_compressible(struct erofs_inode *inode)
 {
+	if (cfg.c_compress_hints_file)
+		return z_erofs_apply_compress_hints(inode);
 	return true;
 }
 
@@ -369,6 +375,7 @@ static int write_uncompressed_file_from_fd(struct erofs_inode *inode, int fd)
 			return -EIO;
 		}
 	}
+	erofs_droid_blocklist_write(inode, inode->u.i_blkaddr, nblocks);
 	return 0;
 }
 
@@ -379,6 +386,12 @@ int erofs_write_file(struct erofs_inode *inode)
 	if (!inode->i_size) {
 		inode->datalayout = EROFS_INODE_FLAT_PLAIN;
 		return 0;
+	}
+
+	if (cfg.c_chunkbits) {
+		inode->u.chunkbits = cfg.c_chunkbits;
+		inode->u.chunkformat = EROFS_CHUNK_FORMAT_INDEXES;
+		return erofs_blob_write_chunked_file(inode);
 	}
 
 	if (cfg.c_compr_alg_master && erofs_file_is_compressible(inode)) {
@@ -434,6 +447,10 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 			if (is_inode_layout_compression(inode))
 				u.dic.i_u.compressed_blocks =
 					cpu_to_le32(inode->u.i_blocks);
+			else if (inode->datalayout ==
+					EROFS_INODE_CHUNK_BASED)
+				u.dic.i_u.c.format =
+					cpu_to_le16(inode->u.chunkformat);
 			else
 				u.dic.i_u.raw_blkaddr =
 					cpu_to_le32(inode->u.i_blkaddr);
@@ -449,8 +466,8 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 
 		u.die.i_ino = cpu_to_le32(inode->i_ino[0]);
 
-		u.die.i_uid = cpu_to_le16(inode->i_uid);
-		u.die.i_gid = cpu_to_le16(inode->i_gid);
+		u.die.i_uid = cpu_to_le32(inode->i_uid);
+		u.die.i_gid = cpu_to_le32(inode->i_gid);
 
 		u.die.i_ctime = cpu_to_le64(inode->i_ctime);
 		u.die.i_ctime_nsec = cpu_to_le32(inode->i_ctime_nsec);
@@ -467,6 +484,10 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 			if (is_inode_layout_compression(inode))
 				u.die.i_u.compressed_blocks =
 					cpu_to_le32(inode->u.i_blocks);
+			else if (inode->datalayout ==
+					EROFS_INODE_CHUNK_BASED)
+				u.die.i_u.c.format =
+					cpu_to_le16(inode->u.chunkformat);
 			else
 				u.die.i_u.raw_blkaddr =
 					cpu_to_le32(inode->u.i_blkaddr);
@@ -499,12 +520,19 @@ static bool erofs_bh_flush_write_inode(struct erofs_buffer_head *bh)
 	}
 
 	if (inode->extent_isize) {
-		/* write compression metadata */
-		off = Z_EROFS_VLE_EXTENT_ALIGN(off);
-		ret = dev_write(inode->compressmeta, off, inode->extent_isize);
-		if (ret)
-			return false;
-		free(inode->compressmeta);
+		if (inode->datalayout == EROFS_INODE_CHUNK_BASED) {
+			ret = erofs_blob_write_chunk_indexes(inode, off);
+			if (ret)
+				return false;
+		} else {
+			/* write compression metadata */
+			off = Z_EROFS_VLE_EXTENT_ALIGN(off);
+			ret = dev_write(inode->compressmeta, off,
+					inode->extent_isize);
+			if (ret)
+				return false;
+			free(inode->compressmeta);
+		}
 	}
 
 	inode->bh = NULL;
@@ -516,7 +544,7 @@ static struct erofs_bhops erofs_write_inode_bhops = {
 	.flush = erofs_bh_flush_write_inode,
 };
 
-int erofs_prepare_tail_block(struct erofs_inode *inode)
+static int erofs_prepare_tail_block(struct erofs_inode *inode)
 {
 	struct erofs_buffer_head *bh;
 	int ret;
@@ -545,7 +573,7 @@ int erofs_prepare_tail_block(struct erofs_inode *inode)
 	return 0;
 }
 
-int erofs_prepare_inode_buffer(struct erofs_inode *inode)
+static int erofs_prepare_inode_buffer(struct erofs_inode *inode)
 {
 	unsigned int inodesize;
 	struct erofs_buffer_head *bh, *ibh;
@@ -559,6 +587,13 @@ int erofs_prepare_inode_buffer(struct erofs_inode *inode)
 
 	if (is_inode_layout_compression(inode))
 		goto noinline;
+	if (inode->datalayout == EROFS_INODE_CHUNK_BASED)
+		goto noinline;
+
+	if (cfg.c_noinline_data && S_ISREG(inode->i_mode)) {
+		inode->datalayout = EROFS_INODE_FLAT_PLAIN;
+		goto noinline;
+	}
 
 	/*
 	 * if the file size is block-aligned for uncompressed files,
@@ -623,7 +658,7 @@ static struct erofs_bhops erofs_write_inline_bhops = {
 	.flush = erofs_bh_flush_write_inline,
 };
 
-int erofs_write_tail_end(struct erofs_inode *inode)
+static int erofs_write_tail_end(struct erofs_inode *inode)
 {
 	struct erofs_buffer_head *bh, *ibh;
 
@@ -638,6 +673,8 @@ int erofs_write_tail_end(struct erofs_inode *inode)
 
 		ibh->fsprivate = erofs_igrab(inode);
 		ibh->op = &erofs_write_inline_bhops;
+
+		erofs_droid_blocklist_write_tail_end(inode, NULL_ADDR);
 	} else {
 		int ret;
 		erofs_off_t pos;
@@ -657,6 +694,8 @@ int erofs_write_tail_end(struct erofs_inode *inode)
 		inode->idata_size = 0;
 		free(inode->idata);
 		inode->idata = NULL;
+
+		erofs_droid_blocklist_write_tail_end(inode, erofs_blknr(pos));
 	}
 out:
 	/* now bh_data can drop directly */
@@ -665,11 +704,7 @@ out:
 		 * Don't leave DATA buffers which were written in the global
 		 * buffer list. It will make balloc() slowly.
 		 */
-#if 0
-		bh->op = &erofs_drop_directly_bhops;
-#else
 		erofs_bdrop(bh, false);
-#endif
 		inode->bh_data = NULL;
 	}
 	return 0;
@@ -733,8 +768,7 @@ int erofs_droid_inode_fsconfig(struct erofs_inode *inode,
 			  cfg.target_out_path,
 			  &uid, &gid, &mode, &inode->capabilities);
 
-	erofs_dbg("/%s -> mode = 0x%x, uid = 0x%x, gid = 0x%x, "
-		  "capabilities = 0x%" PRIx64 "\n",
+	erofs_dbg("/%s -> mode = 0x%x, uid = 0x%x, gid = 0x%x, capabilities = 0x%" PRIx64,
 		  fspath, mode, uid, gid, inode->capabilities);
 
 	if (decorated)
@@ -753,9 +787,9 @@ static int erofs_droid_inode_fsconfig(struct erofs_inode *inode,
 }
 #endif
 
-int erofs_fill_inode(struct erofs_inode *inode,
-		     struct stat64 *st,
-		     const char *path)
+static int erofs_fill_inode(struct erofs_inode *inode,
+			    struct stat64 *st,
+			    const char *path)
 {
 	int err = erofs_droid_inode_fsconfig(inode, st, path);
 
@@ -765,7 +799,7 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	inode->i_uid = cfg.c_uid == -1 ? st->st_uid : cfg.c_uid;
 	inode->i_gid = cfg.c_gid == -1 ? st->st_gid : cfg.c_gid;
 	inode->i_ctime = st->st_ctime;
-	inode->i_ctime_nsec = st->st_ctim.tv_nsec;
+	inode->i_ctime_nsec = ST_CTIM_NSEC(st);
 
 	switch (cfg.c_timeinherit) {
 	case TIMESTAMP_CLAMPING:
@@ -819,34 +853,24 @@ int erofs_fill_inode(struct erofs_inode *inode,
 	return 0;
 }
 
-struct erofs_inode *erofs_new_inode(void)
+static struct erofs_inode *erofs_new_inode(void)
 {
-	static unsigned int counter;
 	struct erofs_inode *inode;
 
-	inode = malloc(sizeof(struct erofs_inode));
+	inode = calloc(1, sizeof(struct erofs_inode));
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	inode->i_parent = NULL;	/* also used to indicate a new inode */
-
-	inode->i_ino[0] = counter++;	/* inode serial number */
+	inode->i_ino[0] = sbi.inos++;	/* inode serial number */
 	inode->i_count = 1;
 
 	init_list_head(&inode->i_subdirs);
 	init_list_head(&inode->i_xattrs);
-
-	inode->idata_size = 0;
-	inode->xattr_isize = 0;
-	inode->extent_isize = 0;
-
-	inode->bh = inode->bh_inline = inode->bh_data = NULL;
-	inode->idata = NULL;
 	return inode;
 }
 
 /* get the inode from the (source) path */
-struct erofs_inode *erofs_iget_from_path(const char *path, bool is_src)
+static struct erofs_inode *erofs_iget_from_path(const char *path, bool is_src)
 {
 	struct stat64 st;
 	struct erofs_inode *inode;
@@ -885,7 +909,7 @@ struct erofs_inode *erofs_iget_from_path(const char *path, bool is_src)
 	return inode;
 }
 
-void erofs_fixup_meta_blkaddr(struct erofs_inode *rootdir)
+static void erofs_fixup_meta_blkaddr(struct erofs_inode *rootdir)
 {
 	const erofs_off_t rootnid_maxoffset = 0xffff << EROFS_ISLOTBITS;
 	struct erofs_buffer_head *const bh = rootdir->bh;
@@ -918,7 +942,7 @@ erofs_nid_t erofs_lookupnid(struct erofs_inode *inode)
 	return inode->nid = (off - meta_offset) >> EROFS_ISLOTBITS;
 }
 
-void erofs_d_invalidate(struct erofs_dentry *d)
+static void erofs_d_invalidate(struct erofs_dentry *d)
 {
 	struct erofs_inode *const inode = d->inode;
 
@@ -926,7 +950,7 @@ void erofs_d_invalidate(struct erofs_dentry *d)
 	erofs_iput(inode);
 }
 
-struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
+static struct erofs_inode *erofs_mkfs_build_tree(struct erofs_inode *dir)
 {
 	int ret;
 	DIR *_dir;
@@ -1086,4 +1110,3 @@ struct erofs_inode *erofs_mkfs_build_tree_from_path(struct erofs_inode *parent,
 
 	return erofs_mkfs_build_tree(inode);
 }
-

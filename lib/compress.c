@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/lib/compress.c
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Miao Xie <miaoxie@huawei.com>
@@ -18,10 +16,10 @@
 #include "erofs/cache.h"
 #include "erofs/compress.h"
 #include "compressor.h"
+#include "erofs/block_list.h"
+#include "erofs/compress_hints.h"
 
 static struct erofs_compress compresshandle;
-static int compressionlevel;
-
 static unsigned int algorithmtype[2];
 
 struct z_erofs_vle_compress_ctx {
@@ -72,10 +70,11 @@ static void vle_write_indexes(struct z_erofs_vle_compress_ctx *ctx,
 
 	di.di_clusterofs = cpu_to_le16(ctx->clusterofs);
 
-	/* whether the tail-end (un)compressed block or not */
+	/* whether the tail-end uncompressed block or not */
 	if (!d1) {
-		type = raw ? Z_EROFS_VLE_CLUSTER_TYPE_PLAIN :
-			Z_EROFS_VLE_CLUSTER_TYPE_HEAD;
+		/* TODO: tail-packing inline compressed data */
+		DBG_BUGON(!raw);
+		type = Z_EROFS_VLE_CLUSTER_TYPE_PLAIN;
 		advise = cpu_to_le16(type << Z_EROFS_VLE_DI_CLUSTER_TYPE_BIT);
 
 		di.di_advise = advise;
@@ -90,7 +89,7 @@ static void vle_write_indexes(struct z_erofs_vle_compress_ctx *ctx,
 
 	do {
 		/* XXX: big pcluster feature should be per-inode */
-		if (d0 == 1 && cfg.c_physical_clusterblks > 1) {
+		if (d0 == 1 && erofs_sb_has_big_pcluster()) {
 			type = Z_EROFS_VLE_CLUSTER_TYPE_NONHEAD;
 			di.di_u.delta[0] = cpu_to_le16(ctx->compressedblks |
 					Z_EROFS_VLE_DI_D0_CBLKCNT);
@@ -128,7 +127,7 @@ static int write_uncompressed_extent(struct z_erofs_vle_compress_ctx *ctx,
 	unsigned int count;
 
 	/* reset clusterofs to 0 if permitted */
-	if (!erofs_sb_has_lz4_0padding() &&
+	if (!erofs_sb_has_lz4_0padding() && ctx->clusterofs &&
 	    ctx->head >= ctx->clusterofs) {
 		ctx->head -= ctx->clusterofs;
 		*len += ctx->clusterofs;
@@ -149,14 +148,18 @@ static int write_uncompressed_extent(struct z_erofs_vle_compress_ctx *ctx,
 	return count;
 }
 
-/* TODO: apply per-(sub)file strategies here */
 static unsigned int z_erofs_get_max_pclusterblks(struct erofs_inode *inode)
 {
 #ifndef NDEBUG
 	if (cfg.c_random_pclusterblks)
-		return 1 + rand() % cfg.c_physical_clusterblks;
+		return 1 + rand() % cfg.c_pclusterblks_max;
 #endif
-	return cfg.c_physical_clusterblks;
+	if (cfg.c_compress_hints_file) {
+		z_erofs_apply_compress_hints(inode);
+		DBG_BUGON(!inode->z_physical_clusterblks);
+		return inode->z_physical_clusterblks;
+	}
+	return cfg.c_pclusterblks_def;
 }
 
 static int vle_compress_one(struct erofs_inode *inode,
@@ -185,8 +188,7 @@ static int vle_compress_one(struct erofs_inode *inode,
 		}
 
 		count = min(len, cfg.c_max_decompressed_extent_bytes);
-		ret = erofs_compress_destsize(h, compressionlevel,
-					      ctx->queue + ctx->head,
+		ret = erofs_compress_destsize(h, ctx->queue + ctx->head,
 					      &count, dst, pclustersize);
 		if (ret <= 0) {
 			if (ret != -EAGAIN) {
@@ -292,13 +294,12 @@ static void *write_compacted_indexes(u8 *out,
 	bool update_blkaddr;
 	erofs_blk_t blkaddr;
 
-	if (destsize == 4) {
+	if (destsize == 4)
 		vcnt = 2;
-	} else if (destsize == 2 && logical_clusterbits == 12) {
+	else if (destsize == 2 && logical_clusterbits == 12)
 		vcnt = 16;
-	} else {
+	else
 		return ERR_PTR(-EINVAL);
-	}
 	encodebits = (vcnt * destsize * 8 - 32) / vcnt;
 	blkaddr = *blkaddr_ret;
 	update_blkaddr = erofs_sb_has_big_pcluster();
@@ -467,8 +468,8 @@ int erofs_write_compressed_file(struct erofs_inode *inode)
 	erofs_blk_t blkaddr, compressed_blocks;
 	unsigned int legacymetasize;
 	int ret, fd;
-
 	u8 *compressmeta = malloc(vle_compressmeta_capacity(inode->i_size));
+
 	if (!compressmeta)
 		return -ENOMEM;
 
@@ -494,7 +495,7 @@ int erofs_write_compressed_file(struct erofs_inode *inode)
 		inode->datalayout = EROFS_INODE_FLAT_COMPRESSION_LEGACY;
 	}
 
-	if (cfg.c_physical_clusterblks > 1) {
+	if (erofs_sb_has_big_pcluster()) {
 		inode->z_advise |= Z_EROFS_ADVISE_BIG_PCLUSTER_1;
 		if (inode->datalayout == EROFS_INODE_FLAT_COMPRESSION)
 			inode->z_advise |= Z_EROFS_ADVISE_BIG_PCLUSTER_2;
@@ -571,6 +572,7 @@ int erofs_write_compressed_file(struct erofs_inode *inode)
 		DBG_BUGON(ret);
 	}
 	inode->compressmeta = compressmeta;
+	erofs_droid_blocklist_write(inode, blkaddr, compressed_blocks);
 	return 0;
 
 err_bdrop:
@@ -603,7 +605,7 @@ int z_erofs_build_compr_cfgs(struct erofs_buffer_head *sb_bh)
 			.lz4 = {
 				.max_distance =
 					cpu_to_le16(sbi.lz4_max_distance),
-				.max_pclusterblks = cfg.c_physical_clusterblks,
+				.max_pclusterblks = cfg.c_pclusterblks_max,
 			}
 		};
 
@@ -640,9 +642,9 @@ int z_erofs_compress_init(struct erofs_buffer_head *sb_bh)
 	if (!cfg.c_compr_alg_master)
 		return 0;
 
-	compressionlevel = cfg.c_compr_level_master < 0 ?
-		compresshandle.alg->default_level :
-		cfg.c_compr_level_master;
+	ret = erofs_compressor_setlevel(&compresshandle, cfg.c_compr_level_master);
+	if (ret)
+		return ret;
 
 	/* figure out primary algorithm */
 	ret = erofs_get_compress_algorithm_id(cfg.c_compr_alg_master);
@@ -655,11 +657,11 @@ int z_erofs_compress_init(struct erofs_buffer_head *sb_bh)
 	 * if big pcluster is enabled, an extra CBLKCNT lcluster index needs
 	 * to be loaded in order to get those compressed block counts.
 	 */
-	if (cfg.c_physical_clusterblks > 1) {
-		if (cfg.c_physical_clusterblks >
+	if (cfg.c_pclusterblks_max > 1) {
+		if (cfg.c_pclusterblks_max >
 		    Z_EROFS_PCLUSTER_MAX_SIZE / EROFS_BLKSIZ) {
 			erofs_err("unsupported clusterblks %u (too large)",
-				  cfg.c_physical_clusterblks);
+				  cfg.c_pclusterblks_max);
 			return -EINVAL;
 		}
 		erofs_sb_set_big_pcluster();
@@ -677,4 +679,3 @@ int z_erofs_compress_exit(void)
 {
 	return erofs_compressor_exit(&compresshandle);
 }
-
