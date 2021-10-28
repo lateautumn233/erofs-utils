@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/fuse/main.c
- *
  * Created by Li Guifu <blucerlee@gmail.com>
  */
 #include <stdlib.h>
@@ -10,7 +8,7 @@
 #include <libgen.h>
 #include <fuse.h>
 #include <fuse_opt.h>
-
+#include "macosx.h"
 #include "erofs/config.h"
 #include "erofs/print.h"
 #include "erofs/io.h"
@@ -74,10 +72,10 @@ static int erofsfuse_read(const char *path, char *buffer,
 	ret = erofs_pread(&vi, buffer, size, offset);
 	if (ret)
 		return ret;
-	if (offset + size > vi.i_size)
-		return vi.i_size - offset;
 	if (offset >= vi.i_size)
 		return 0;
+	if (offset + size > vi.i_size)
+		return vi.i_size - offset;
 	return size;
 }
 
@@ -111,15 +109,12 @@ static struct options {
 	bool odebug;
 } fusecfg;
 
-#define OPTION(t, p)                           \
-    { t, offsetof(struct options, p), 1 }
+#define OPTION(t, p) { t, offsetof(struct options, p), 1 }
 static const struct fuse_opt option_spec[] = {
 	OPTION("--dbglevel=%u", debug_lvl),
 	OPTION("--help", show_help),
 	FUSE_OPT_END
 };
-
-#define OPTION(t, p)    { t, offsetof(struct options, p), 1 }
 
 static void usage(void)
 {
@@ -249,4 +244,3 @@ err:
 	erofs_exit_configure();
 	return ret ? EXIT_FAILURE : EXIT_SUCCESS;
 }
-
