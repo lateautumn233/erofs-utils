@@ -115,6 +115,20 @@ cc_binary_host {
     defaults: ["mkfs-erofs_defaults"],
 }
 
+cc_binary_host {
+    name: "dump.erofs",
+    defaults: ["erofs-utils_defaults"],
+    srcs: [
+        "lib/*.c",
+        "dump/*.c",
+    ],
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+}
+
 sh_binary_host {
     name: "mkerofsimage.sh",
     src: "mkerofsimage.sh",
