@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/lib/config.c
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Li Guifu <bluce.liguifu@huawei.com>
  */
 #include <string.h>
+#include <stdlib.h>
 #include "erofs/print.h"
 #include "erofs/internal.h"
 
@@ -17,7 +16,7 @@ void erofs_init_configure(void)
 {
 	memset(&cfg, 0, sizeof(cfg));
 
-	cfg.c_dbg_lvl  = 2;
+	cfg.c_dbg_lvl  = EROFS_WARN;
 	cfg.c_version  = PACKAGE_VERSION;
 	cfg.c_dry_run  = false;
 	cfg.c_compr_level_master = -1;
@@ -26,7 +25,8 @@ void erofs_init_configure(void)
 	cfg.c_unix_timestamp = -1;
 	cfg.c_uid = -1;
 	cfg.c_gid = -1;
-	cfg.c_physical_clusterblks = 1;
+	cfg.c_pclusterblks_max = 1;
+	cfg.c_pclusterblks_def = 1;
 	cfg.c_max_decompressed_extent_bytes = -1;
 }
 
@@ -34,6 +34,8 @@ void erofs_show_config(void)
 {
 	const struct erofs_configure *c = &cfg;
 
+	if (c->c_dbg_lvl < EROFS_WARN)
+		return;
 	erofs_dump("\tc_version:           [%8s]\n", c->c_version);
 	erofs_dump("\tc_dbg_lvl:           [%8d]\n", c->c_dbg_lvl);
 	erofs_dump("\tc_dry_run:           [%8d]\n", c->c_dry_run);
@@ -45,6 +47,8 @@ void erofs_exit_configure(void)
 	if (cfg.sehnd)
 		selabel_close(cfg.sehnd);
 #endif
+	if (cfg.c_img_path)
+		free(cfg.c_img_path);
 }
 
 static unsigned int fullpath_prefix;	/* root directory prefix length */
@@ -85,4 +89,3 @@ int erofs_selabel_open(const char *file_contexts)
 	return 0;
 }
 #endif
-

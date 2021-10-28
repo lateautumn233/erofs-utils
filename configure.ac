@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.69])
 
-m4_define([erofs_utils_version], m4_esyscmd([sed -n '1p' VERSION | tr -d '\n']))
+m4_define([erofs_utils_version], m4_esyscmd_s([scripts/get-version-number]))
 m4_define([erofs_utils_date], m4_esyscmd([sed -n '2p' VERSION | tr -d '\n']))
 
 AC_INIT([erofs-utils], [erofs_utils_version], [linux-erofs@lists.ozlabs.org])
@@ -128,6 +128,8 @@ AC_TYPE_INT64_T
 AC_TYPE_SIZE_T
 AC_TYPE_SSIZE_T
 AC_CHECK_MEMBERS([struct stat.st_rdev])
+AC_CHECK_MEMBERS([struct stat.st_atim])
+AC_CHECK_MEMBERS([struct stat.st_atimensec])
 AC_TYPE_UINT64_T
 
 #
@@ -154,7 +156,22 @@ AC_CHECK_DECL(lseek64,[AC_DEFINE(HAVE_LSEEK64_PROTOTYPE, 1,
    #include <unistd.h>])
 
 # Checks for library functions.
-AC_CHECK_FUNCS([backtrace fallocate gettimeofday memset realpath strdup strerror strrchr strtoull])
+AC_CHECK_FUNCS(m4_flatten([
+	backtrace
+	copy_file_range
+	fallocate
+	gettimeofday
+	lgetxattr
+	llistxattr
+	memset
+	realpath
+	pread64
+	pwrite64
+	strdup
+	strerror
+	strrchr
+	strtoull
+	tmpfile64]))
 
 # Configure debug mode
 AS_IF([test "x$enable_debug" != "xno"], [], [
@@ -270,7 +287,7 @@ if test "x${have_lz4}" = "xyes"; then
     LZ4_LIBS="-Wl,-Bstatic -Wl,-whole-archive -Xlinker ${LZ4_LIBS} -Wl,-no-whole-archive -Wl,-Bdynamic"
     test -z "${with_lz4_libdir}" || LZ4_LIBS="-L${with_lz4_libdir} $LZ4_LIBS"
   else
-    test -z "${with_lz4_libdir}" || LZ4_LIBS="-R${with_lz4_libdir} $LZ4_LIBS"
+    test -z "${with_lz4_libdir}" || LZ4_LIBS="-L${with_lz4_libdir} -R${with_lz4_libdir} $LZ4_LIBS"
   fi
   liblz4_LIBS="${LZ4_LIBS}"
 fi
@@ -280,6 +297,6 @@ AC_CONFIG_FILES([Makefile
 		 man/Makefile
 		 lib/Makefile
 		 mkfs/Makefile
+		 dump/Makefile
 		 fuse/Makefile])
 AC_OUTPUT
-
