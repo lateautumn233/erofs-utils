@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * mkfs/main.c
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Li Guifu <bluce.liguifu@huawei.com>
@@ -23,6 +21,8 @@
 #include "erofs/xattr.h"
 #include "erofs/exclude.h"
 #include "erofs/block_list.h"
+#include "erofs/compress_hints.h"
+#include "erofs/blobchunk.h"
 
 #ifdef HAVE_LIBUUID
 #include <uuid.h>
@@ -44,11 +44,14 @@ static struct option long_options[] = {
 	{"random-pclusterblks", no_argument, NULL, 8},
 #endif
 	{"max-extent-bytes", required_argument, NULL, 9},
+	{"compress-hints", required_argument, NULL, 10},
+	{"chunksize", required_argument, NULL, 11},
+	{"quiet", no_argument, 0, 12},
 #ifdef WITH_ANDROID
-	{"mount-point", required_argument, NULL, 10},
-	{"product-out", required_argument, NULL, 11},
-	{"fs-config-file", required_argument, NULL, 12},
-	{"block-list-file", required_argument, NULL, 13},
+	{"mount-point", required_argument, NULL, 512},
+	{"product-out", required_argument, NULL, 513},
+	{"fs-config-file", required_argument, NULL, 514},
+	{"block-list-file", required_argument, NULL, 515},
 #endif
 	{0, 0, 0, 0},
 };
@@ -70,15 +73,18 @@ static void usage(void)
 {
 	fputs("usage: [options] FILE DIRECTORY\n\n"
 	      "Generate erofs image from DIRECTORY to FILE, and [options] are:\n"
-	      " -zX[,Y]               X=compressor (Y=compression level, optional)\n"
-	      " -C#                   specify the size of compress physical cluster in bytes\n"
 	      " -d#                   set output message level to # (maximum 9)\n"
 	      " -x#                   set xattr tolerance to # (< 0, disable xattrs; default 2)\n"
+	      " -zX[,Y]               X=compressor (Y=compression level, optional)\n"
+	      " -C#                   specify the size of compress physical cluster in bytes\n"
 	      " -EX[,...]             X=extended options\n"
 	      " -T#                   set a fixed UNIX timestamp # to all files\n"
 #ifdef HAVE_LIBUUID
 	      " -UX                   use a given filesystem UUID\n"
 #endif
+	      " --all-root            make all files owned by root\n"
+	      " --chunksize=#         generate chunk-based files with #-byte chunks\n"
+	      " --compress-hints=X    specify a file to configure per-file compression strategy\n"
 	      " --exclude-path=X      avoid including file X (X = exact literal path)\n"
 	      " --exclude-regex=X     avoid including files that match X (X = regular expression)\n"
 #ifdef HAVE_LIBSELINUX
@@ -86,9 +92,9 @@ static void usage(void)
 #endif
 	      " --force-uid=#         set all file uids to # (# = UID)\n"
 	      " --force-gid=#         set all file gids to # (# = GID)\n"
-	      " --all-root            make all files owned by root\n"
 	      " --help                display this help and exit\n"
 	      " --max-extent-bytes=#  set maximum decompressed extent size # in bytes\n"
+	      " --quiet               quiet execution (do not write anything to standard output.)\n"
 #ifndef NDEBUG
 	      " --random-pclusterblks randomize pclusterblks for big pcluster (debugging only)\n"
 #endif
@@ -97,7 +103,7 @@ static void usage(void)
 	      " --mount-point=X       X=prefix of target fs path (default: /)\n"
 	      " --product-out=X       X=product_out directory\n"
 	      " --fs-config-file=X    X=fs_config file\n"
-	      " --block-list-file=X    X=block_list file\n"
+	      " --block-list-file=X   X=block_list file\n"
 #endif
 	      "\nAvailable compressors are: ", stderr);
 	print_available_compressors(stderr, ", ");
@@ -161,6 +167,12 @@ static int parse_extended_opts(const char *opts)
 				return -EINVAL;
 			erofs_sb_clear_sb_chksum();
 		}
+
+		if (MATCH_EXTENTED_OPT("noinline_data", token, keylen)) {
+			if (vallen)
+				return -EINVAL;
+			cfg.c_noinline_data = true;
+		}
 	}
 	return 0;
 }
@@ -169,8 +181,9 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 {
 	char *endptr;
 	int opt, i;
+	bool quiet = false;
 
-	while((opt = getopt_long(argc, argv, "d:x:z:E:T:U:C:",
+	while ((opt = getopt_long(argc, argv, "C:E:T:U:d:x:z:",
 				 long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'z':
@@ -282,21 +295,24 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 				return -EINVAL;
 			}
 			break;
-#ifdef WITH_ANDROID
 		case 10:
+			cfg.c_compress_hints_file = optarg;
+			break;
+#ifdef WITH_ANDROID
+		case 512:
 			cfg.mount_point = optarg;
 			/* all trailing '/' should be deleted */
 			opt = strlen(cfg.mount_point);
 			if (opt && optarg[opt - 1] == '/')
 				optarg[opt - 1] = '\0';
 			break;
-		case 11:
+		case 513:
 			cfg.target_out_path = optarg;
 			break;
-		case 12:
+		case 514:
 			cfg.fs_config_file = optarg;
 			break;
-		case 13:
+		case 515:
 			cfg.block_list_file = optarg;
 			break;
 #endif
@@ -308,9 +324,31 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 					  optarg);
 				return -EINVAL;
 			}
-			cfg.c_physical_clusterblks = i / EROFS_BLKSIZ;
+			cfg.c_pclusterblks_max = i / EROFS_BLKSIZ;
+			cfg.c_pclusterblks_def = cfg.c_pclusterblks_max;
 			break;
-
+		case 11:
+			i = strtol(optarg, &endptr, 0);
+			if (*endptr != '\0') {
+				erofs_err("invalid chunksize %s", optarg);
+				return -EINVAL;
+			}
+			cfg.c_chunkbits = ilog2(i);
+			if ((1 << cfg.c_chunkbits) != i) {
+				erofs_err("chunksize %s must be a power of two",
+					  optarg);
+				return -EINVAL;
+			}
+			if (i < EROFS_BLKSIZ) {
+				erofs_err("chunksize %s must be larger than block size",
+					  optarg);
+				return -EINVAL;
+			}
+			erofs_sb_set_chunked_file();
+			break;
+		case 12:
+			quiet = true;
+			break;
 		case 1:
 			usage();
 			exit(0);
@@ -343,6 +381,8 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 		erofs_err("Unexpected argument: %s\n", argv[optind]);
 		return -EINVAL;
 	}
+	if (quiet)
+		cfg.c_dbg_lvl = EROFS_ERR;
 	return 0;
 }
 
@@ -353,7 +393,7 @@ int erofs_mkfs_update_super_block(struct erofs_buffer_head *bh,
 	struct erofs_super_block sb = {
 		.magic     = cpu_to_le32(EROFS_SUPER_MAGIC_V1),
 		.blkszbits = LOG_BLOCK_SIZE,
-		.inos   = 0,
+		.inos   = cpu_to_le64(sbi.inos),
 		.build_time = cpu_to_le64(sbi.build_time),
 		.build_time_nsec = cpu_to_le32(sbi.build_time_nsec),
 		.blocks = 0,
@@ -488,6 +528,12 @@ int parse_source_date_epoch(void)
 	return 0;
 }
 
+void erofs_show_progs(int argc, char *argv[])
+{
+	if (cfg.c_dbg_lvl >= EROFS_WARN)
+		fprintf(stderr, "%s %s\n", basename(argv[0]), cfg.c_version);
+}
+
 int main(int argc, char **argv)
 {
 	int err = 0;
@@ -500,11 +546,10 @@ int main(int argc, char **argv)
 	char uuid_str[37] = "not available";
 
 	erofs_init_configure();
-	fprintf(stderr, "%s %s\n", basename(argv[0]), cfg.c_version);
-
 	erofs_mkfs_default_options();
 
 	err = mkfs_parse_options_cfg(argc, argv);
+	erofs_show_progs(argc, argv);
 	if (err) {
 		if (err == -EINVAL)
 			usage();
@@ -515,6 +560,12 @@ int main(int argc, char **argv)
 	if (err) {
 		usage();
 		return 1;
+	}
+
+	if (cfg.c_chunkbits) {
+		err = erofs_blob_init();
+		if (err)
+			return 1;
 	}
 
 	err = lstat64(cfg.c_src_path, &st);
@@ -553,8 +604,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 #endif
-
 	erofs_show_config();
+	if (erofs_sb_has_chunked_file())
+		erofs_warn("EXPERIMENTAL chunked file feature in use. Use at your own risk!");
 	erofs_set_fs_root(cfg.c_src_path);
 #ifndef NDEBUG
 	if (cfg.c_random_pclusterblks)
@@ -571,6 +623,13 @@ int main(int argc, char **argv)
 	if (err < 0) {
 		erofs_err("Failed to balloon erofs_super_block: %s",
 			  erofs_strerror(err));
+		goto exit;
+	}
+
+	err = erofs_load_compress_hints();
+	if (err) {
+		erofs_err("Failed to load compress hints %s",
+			  cfg.c_compress_hints_file);
 		goto exit;
 	}
 
@@ -604,6 +663,13 @@ int main(int argc, char **argv)
 	root_nid = erofs_lookupnid(root_inode);
 	erofs_iput(root_inode);
 
+	if (cfg.c_chunkbits) {
+		erofs_info("total metadata: %u blocks", erofs_mapbh(NULL));
+		err = erofs_blob_remap();
+		if (err)
+			goto exit;
+	}
+
 	err = erofs_mkfs_update_super_block(sb_bh, root_nid, &nblocks);
 	if (err)
 		goto exit;
@@ -622,7 +688,10 @@ exit:
 	erofs_droid_blocklist_fclose();
 #endif
 	dev_close();
+	erofs_cleanup_compress_hints();
 	erofs_cleanup_exclude_rules();
+	if (cfg.c_chunkbits)
+		erofs_blob_exit();
 	erofs_exit_configure();
 
 	if (err) {

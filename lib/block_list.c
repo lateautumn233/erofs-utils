@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * erofs-utils/lib/block_list.c
- *
  * Copyright (C), 2021, Coolpad Group Limited.
  * Created by Yue Hu <huyue2@yulong.com>
  */
@@ -10,16 +8,13 @@
 #include <sys/stat.h>
 #include "erofs/block_list.h"
 
-#define pr_fmt(fmt) "EROFS block_list: " FUNC_LINE_FMT fmt "\n"
+#define EROFS_MODNAME	"erofs block_list"
 #include "erofs/print.h"
 
-static FILE *block_list_fp = NULL;
+static FILE *block_list_fp;
 
 int erofs_droid_blocklist_fopen(void)
 {
-	if (block_list_fp)
-		return 0;
-
 	block_list_fp = fopen(cfg.block_list_file, "w");
 
 	if (!block_list_fp)

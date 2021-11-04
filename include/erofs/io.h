@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * erofs-utils/include/erofs/io.h
- *
  * Copyright (C) 2018-2019 HUAWEI, Inc.
  *             http://www.huawei.com/
  * Created by Li Guifu <bluce.liguifu@huawei.com>
@@ -9,6 +7,7 @@
 #ifndef __EROFS_IO_H
 #define __EROFS_IO_H
 
+#define _GNU_SOURCE
 #include <unistd.h>
 #include "internal.h"
 
@@ -26,6 +25,12 @@ int dev_fsync(void);
 int dev_resize(erofs_blk_t nblocks);
 u64 dev_length(void);
 
+extern int erofs_devfd;
+
+int erofs_copy_file_range(int fd_in, erofs_off_t *off_in,
+                          int fd_out, erofs_off_t *off_out,
+                          size_t length);
+
 static inline int blk_write(const void *buf, erofs_blk_t blkaddr,
 			    u32 nblocks)
 {
@@ -41,4 +46,3 @@ static inline int blk_read(void *buf, erofs_blk_t start,
 }
 
 #endif
-
