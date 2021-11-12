@@ -61,8 +61,8 @@ err_out:
 	return err;
 }
 
-static int erofs_map_blocks(struct erofs_inode *inode,
-			    struct erofs_map_blocks *map, int flags)
+int erofs_map_blocks(struct erofs_inode *inode,
+		struct erofs_map_blocks *map, int flags)
 {
 	struct erofs_inode *vi = inode;
 	struct erofs_inode_chunk_index *idx;
@@ -201,7 +201,7 @@ static int z_erofs_read_data(struct erofs_inode *inode, char *buffer,
 	while (end > offset) {
 		map.m_la = end - 1;
 
-		ret = z_erofs_map_blocks_iter(inode, &map);
+		ret = z_erofs_map_blocks_iter(inode, &map, 0);
 		if (ret)
 			break;
 
@@ -244,9 +244,10 @@ static int z_erofs_read_data(struct erofs_inode *inode, char *buffer,
 		if (ret < 0)
 			break;
 
-		algorithmformat = map.m_flags & EROFS_MAP_ZIPPED ?
-						Z_EROFS_COMPRESSION_LZ4 :
-						Z_EROFS_COMPRESSION_SHIFTED;
+		if (map.m_flags & EROFS_MAP_ZIPPED)
+			algorithmformat = inode->z_algorithmtype[0];
+		else
+			algorithmformat = Z_EROFS_COMPRESSION_SHIFTED;
 
 		ret = z_erofs_decompress(&(struct z_erofs_decompress_req) {
 					.in = raw,

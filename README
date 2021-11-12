@@ -8,6 +8,7 @@ Dependencies & build
 --------------------
 
  lz4 1.8.0+ for lz4 enabled [2], lz4 1.9.3+ highly recommended [4][5].
+ XZ Utils 5.3.2alpha [6] or later versions for MicroLZMA enabled.
 
  libfuse 2.6+ for erofsfuse enabled as a plus.
 
@@ -165,17 +166,8 @@ Contribution
 ------------
 
 erofs-utils is under GPLv2+ as a part of EROFS filesystem project,
-feel free to send patches or feedback to us.
-
-To:
+feel free to send patches or feedback to:
   linux-erofs mailing list   <linux-erofs@lists.ozlabs.org>
-  Li Guifu                   <bluce.liguifu@huawei.com>
-  Miao Xie                   <miaoxie@huawei.com>
-  Fang Wei                   <fangwei1@huawei.com>
-
-Cc:
-  Gao Xiang                  <xiang@kernel.org>
-  Chao Yu                    <yuchao0@huawei.com>
 
 Comments
 --------
@@ -230,3 +222,5 @@ Comments
     https://github.com/lz4/lz4/issues/783
 
     which is also resolved in lz4-1.9.3.
+
+[6] https://tukaani.org/xz/xz-5.3.2alpha.tar.xz
