@@ -129,6 +129,20 @@ cc_binary_host {
     },
 }
 
+cc_binary_host {
+    name: "fsck.erofs",
+    defaults: ["erofs-utils_defaults"],
+    srcs: [
+        "lib/*.c",
+        "fsck/*.c",
+    ],
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+}
+
 sh_binary_host {
     name: "mkerofsimage.sh",
     src: "mkerofsimage.sh",
