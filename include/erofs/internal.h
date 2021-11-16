@@ -82,6 +82,8 @@ struct erofs_sb_info {
 
 	u16 available_compr_algs;
 	u16 lz4_max_distance;
+
+	u32 checksum;
 };
 
 /* global sbi */
@@ -259,23 +261,47 @@ struct erofs_map_blocks {
 	erofs_blk_t index;
 };
 
+/*
+ * Used to get the exact decompressed length, e.g. fiemap (consider lookback
+ * approach instead if possible since it's more metadata lightweight.)
+ */
+#define EROFS_GET_BLOCKS_FIEMAP	0x0002
+
 /* super.c */
 int erofs_read_superblock(void);
 
 /* namei.c */
+int erofs_read_inode_from_disk(struct erofs_inode *vi);
 int erofs_ilookup(const char *path, struct erofs_inode *vi);
+int erofs_read_inode_from_disk(struct erofs_inode *vi);
 
 /* data.c */
 int erofs_pread(struct erofs_inode *inode, char *buf,
 		erofs_off_t count, erofs_off_t offset);
+int erofs_map_blocks(struct erofs_inode *inode,
+		struct erofs_map_blocks *map, int flags);
 /* zmap.c */
 int z_erofs_fill_inode(struct erofs_inode *vi);
 int z_erofs_map_blocks_iter(struct erofs_inode *vi,
-			    struct erofs_map_blocks *map);
+			    struct erofs_map_blocks *map, int flags);
 
 #ifdef EUCLEAN
 #define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
 #else
 #define EFSCORRUPTED	EIO
 #endif
+
+#define CRC32C_POLY_LE	0x82F63B78
+static inline u32 erofs_crc32c(u32 crc, const u8 *in, size_t len)
+{
+	int i;
+
+	while (len--) {
+		crc ^= *in++;
+		for (i = 0; i < 8; i++)
+			crc = (crc >> 1) ^ ((crc & 1) ? CRC32C_POLY_LE : 0);
+	}
+	return crc;
+}
+
 #endif
