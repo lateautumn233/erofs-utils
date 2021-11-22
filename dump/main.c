@@ -9,6 +9,7 @@
 #include <getopt.h>
 #include <time.h>
 #include "erofs/print.h"
+#include "erofs/inode.h"
 #include "erofs/io.h"
 
 #ifdef HAVE_LIBUUID
@@ -69,6 +70,7 @@ static struct erofs_statistics stats;
 static struct option long_options[] = {
 	{"help", no_argument, NULL, 1},
 	{"nid", required_argument, NULL, 2},
+	{"device", required_argument, NULL, 3},
 	{0, 0, 0, 0},
 };
 
@@ -83,6 +85,7 @@ static struct erofsdump_feature feature_lists[] = {
 	{ false, EROFS_FEATURE_INCOMPAT_LZ4_0PADDING, "0padding" },
 	{ false, EROFS_FEATURE_INCOMPAT_BIG_PCLUSTER, "big_pcluster" },
 	{ false, EROFS_FEATURE_INCOMPAT_CHUNKED_FILE, "chunked_file" },
+	{ false, EROFS_FEATURE_INCOMPAT_DEVICE_TABLE, "device_table" },
 };
 
 static int erofs_read_dir(erofs_nid_t nid, erofs_nid_t parent_nid);
@@ -94,12 +97,13 @@ static void usage(void)
 {
 	fputs("usage: [options] IMAGE\n\n"
 	      "Dump erofs layout from IMAGE, and [options] are:\n"
-	      " -S      show statistic information of the image\n"
-	      " -V      print the version number of dump.erofs and exit.\n"
-	      " -e      show extent info (--nid is required)\n"
-	      " -s      show information about superblock\n"
-	      " --nid=# show the target inode info of nid #\n"
-	      " --help  display this help and exit.\n",
+	      " -S              show statistic information of the image\n"
+	      " -V              print the version number of dump.erofs and exit.\n"
+	      " -e              show extent info (--nid is required)\n"
+	      " -s              show information about superblock\n"
+	      " --device=X      specify an extra device to be used together\n"
+	      " --nid=#         show the target inode info of nid #\n"
+	      " --help          display this help and exit.\n",
 	      stderr);
 }
 
@@ -110,7 +114,7 @@ static void erofsdump_print_version(void)
 
 static int erofsdump_parse_options_cfg(int argc, char **argv)
 {
-	int opt;
+	int opt, err;
 
 	while ((opt = getopt_long(argc, argv, "SVes",
 				  long_options, NULL)) != -1) {
@@ -138,6 +142,12 @@ static int erofsdump_parse_options_cfg(int argc, char **argv)
 		case 1:
 			usage();
 			exit(0);
+		case 3:
+			err = blob_open_ro(optarg);
+			if (err)
+				return err;
+			++sbi.extra_devices;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -422,6 +432,10 @@ static int erofsdump_map_blocks(struct erofs_inode *inode,
 
 static void erofsdump_show_fileinfo(bool show_extent)
 {
+	const char *ext_fmt[] = {
+		"%4d: %8" PRIu64 "..%8" PRIu64 " | %7" PRIu64 " : %10" PRIu64 "..%10" PRIu64 " | %7" PRIu64 "\n",
+		"%4d: %8" PRIu64 "..%8" PRIu64 " | %7" PRIu64 " : %10" PRIu64 "..%10" PRIu64 " | %7" PRIu64 "  # device %u\n"
+	};
 	int err, i;
 	erofs_off_t size;
 	u16 access_mode;
@@ -461,16 +475,17 @@ static void erofsdump_show_fileinfo(bool show_extent)
 		if (((access_mode >> i) & 1) == 0)
 			access_mode_str[8 - i] = '-';
 	fprintf(stdout, "File : %s\n", path);
-	fprintf(stdout, "NID: %" PRIu64 "  ", inode.nid);
-	fprintf(stdout, "Links: %u  ", inode.i_nlink);
-	fprintf(stdout, "Layout: %d\n", inode.datalayout);
+	fprintf(stdout, "Size: %" PRIu64"  On-disk size: %" PRIu64 "  %s\n",
+		inode.i_size, size,
+		file_category_types[erofs_mode_to_ftype(inode.i_mode)]);
+	fprintf(stdout, "NID: %" PRIu64 "   ", inode.nid);
+	fprintf(stdout, "Links: %u   ", inode.i_nlink);
+	fprintf(stdout, "Layout: %d   Compression ratio: %.2f%%\n",
+		inode.datalayout,
+		(double)(100 * size) / (double)(inode.i_size));
 	fprintf(stdout, "Inode size: %d   ", inode.inode_isize);
 	fprintf(stdout, "Extent size: %u   ", inode.extent_isize);
 	fprintf(stdout,	"Xattr size: %u\n", inode.xattr_isize);
-	fprintf(stdout, "File size: %" PRIu64"  ", inode.i_size);
-	fprintf(stdout,	"On-disk size: %" PRIu64 "  ", size);
-	fprintf(stdout, "Compression ratio: %.2f%%\n",
-			(double)(100 * size) / (double)(inode.i_size));
 	fprintf(stdout, "Uid: %u   Gid: %u  ", inode.i_uid, inode.i_gid);
 	fprintf(stdout, "Access: %04o/%s\n", access_mode, access_mode_str);
 	fprintf(stdout, "Timestamp: %s.%09d\n", timebuf, inode.i_ctime_nsec);
@@ -480,16 +495,29 @@ static void erofsdump_show_fileinfo(bool show_extent)
 
 	fprintf(stdout, "\n Ext:   logical offset   |  length :     physical offset    |  length \n");
 	while (map.m_la < inode.i_size) {
+		struct erofs_map_dev mdev;
+
 		err = erofsdump_map_blocks(&inode, &map,
 				EROFS_GET_BLOCKS_FIEMAP);
 		if (err) {
-			erofs_err("get file blocks range failed");
+			erofs_err("failed to get file blocks range");
 			return;
 		}
 
-		fprintf(stdout, "%4d: %8" PRIu64 "..%8" PRIu64 " | %7" PRIu64 " : %10" PRIu64 "..%10" PRIu64 " | %7" PRIu64 "\n",
-			extent_count++, map.m_la, map.m_la + map.m_llen, map.m_llen,
-			map.m_pa, map.m_pa + map.m_plen, map.m_plen);
+		mdev = (struct erofs_map_dev) {
+			.m_deviceid = map.m_deviceid,
+			.m_pa = map.m_pa,
+		};
+		err = erofs_map_dev(&sbi, &mdev);
+		if (err) {
+			erofs_err("failed to map device");
+			return;
+		}
+
+		fprintf(stdout, ext_fmt[!!mdev.m_deviceid], extent_count++,
+			map.m_la, map.m_la + map.m_llen, map.m_llen,
+			mdev.m_pa, mdev.m_pa + map.m_plen, map.m_plen,
+			mdev.m_deviceid);
 		map.m_la += map.m_llen;
 	}
 	fprintf(stdout, "%s: %d extents found\n", path, extent_count);
@@ -609,7 +637,7 @@ static void erofsdump_show_superblock(void)
 	fprintf(stdout, "Filesystem magic number:                      0x%04X\n",
 			EROFS_SUPER_MAGIC_V1);
 	fprintf(stdout, "Filesystem blocks:                            %llu\n",
-			sbi.blocks | 0ULL);
+			sbi.total_blocks | 0ULL);
 	fprintf(stdout, "Filesystem inode metadata start block:        %u\n",
 			sbi.meta_blkaddr);
 	fprintf(stdout, "Filesystem shared xattr metadata start block: %u\n",
@@ -656,7 +684,7 @@ int main(int argc, char **argv)
 	err = erofs_read_superblock();
 	if (err) {
 		erofs_err("failed to read superblock");
-		goto exit;
+		goto exit_dev_close;
 	}
 
 	if (!dumpcfg.totalshow) {
@@ -671,13 +699,16 @@ int main(int argc, char **argv)
 
 	if (dumpcfg.show_extent && !dumpcfg.show_inode) {
 		usage();
-		goto exit;
+		goto exit_dev_close;
 	}
 
 	if (dumpcfg.show_inode)
 		erofsdump_show_fileinfo(dumpcfg.show_extent);
 
+exit_dev_close:
+	dev_close();
 exit:
+	blob_closeall();
 	erofs_exit_configure();
 	return err;
 }
