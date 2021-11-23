@@ -60,8 +60,16 @@ typedef u32 erofs_blk_t;
 
 struct erofs_buffer_head;
 
+struct erofs_device_info {
+	u32 blocks;
+	u32 mapped_blkaddr;
+};
+
 struct erofs_sb_info {
-	u64 blocks;
+	struct erofs_device_info *devs;
+
+	u64 total_blocks;
+	u64 primarydevice_blocks;
 
 	erofs_blk_t meta_blkaddr;
 	erofs_blk_t xattr_blkaddr;
@@ -84,6 +92,11 @@ struct erofs_sb_info {
 	u16 lz4_max_distance;
 
 	u32 checksum;
+	u16 extra_devices;
+	union {
+		u16 devt_slotoff;		/* used for mkfs */
+		u16 device_id_mask;		/* used for others */
+	};
 };
 
 /* global sbi */
@@ -112,6 +125,7 @@ EROFS_FEATURE_FUNCS(lz4_0padding, incompat, INCOMPAT_LZ4_0PADDING)
 EROFS_FEATURE_FUNCS(compr_cfgs, incompat, INCOMPAT_COMPR_CFGS)
 EROFS_FEATURE_FUNCS(big_pcluster, incompat, INCOMPAT_BIG_PCLUSTER)
 EROFS_FEATURE_FUNCS(chunked_file, incompat, INCOMPAT_CHUNKED_FILE)
+EROFS_FEATURE_FUNCS(device_table, incompat, INCOMPAT_DEVICE_TABLE)
 EROFS_FEATURE_FUNCS(sb_chksum, compat, COMPAT_SB_CHKSUM)
 
 #define EROFS_I_EA_INITED	(1 << 0)
@@ -238,7 +252,7 @@ static inline const char *erofs_strerror(int err)
 enum {
 	BH_Meta,
 	BH_Mapped,
-	BH_Zipped,
+	BH_Encoded,
 	BH_FullMapped,
 };
 
@@ -246,8 +260,8 @@ enum {
 #define EROFS_MAP_MAPPED	(1 << BH_Mapped)
 /* Located in metadata (could be copied from bd_inode) */
 #define EROFS_MAP_META		(1 << BH_Meta)
-/* The extent has been compressed */
-#define EROFS_MAP_ZIPPED	(1 << BH_Zipped)
+/* The extent is encoded */
+#define EROFS_MAP_ENCODED	(1 << BH_Encoded)
 /* The length of extent is full */
 #define EROFS_MAP_FULL_MAPPED	(1 << BH_FullMapped)
 
@@ -257,6 +271,8 @@ struct erofs_map_blocks {
 	erofs_off_t m_pa, m_la;
 	u64 m_plen, m_llen;
 
+	unsigned short m_deviceid;
+	char m_algorithmformat;
 	unsigned int m_flags;
 	erofs_blk_t index;
 };
@@ -266,6 +282,16 @@ struct erofs_map_blocks {
  * approach instead if possible since it's more metadata lightweight.)
  */
 #define EROFS_GET_BLOCKS_FIEMAP	0x0002
+
+enum {
+	Z_EROFS_COMPRESSION_SHIFTED = Z_EROFS_COMPRESSION_MAX,
+	Z_EROFS_COMPRESSION_RUNTIME_MAX
+};
+
+struct erofs_map_dev {
+	erofs_off_t m_pa;
+	unsigned int m_deviceid;
+};
 
 /* super.c */
 int erofs_read_superblock(void);
@@ -280,6 +306,7 @@ int erofs_pread(struct erofs_inode *inode, char *buf,
 		erofs_off_t count, erofs_off_t offset);
 int erofs_map_blocks(struct erofs_inode *inode,
 		struct erofs_map_blocks *map, int flags);
+int erofs_map_dev(struct erofs_sb_info *sbi, struct erofs_map_dev *map);
 /* zmap.c */
 int z_erofs_fill_inode(struct erofs_inode *vi);
 int z_erofs_map_blocks_iter(struct erofs_inode *vi,
