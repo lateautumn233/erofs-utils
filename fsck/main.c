@@ -24,6 +24,7 @@ static struct erofsfsck_cfg fsckcfg;
 static struct option long_options[] = {
 	{"help", no_argument, 0, 1},
 	{"extract", no_argument, 0, 2},
+	{"device", required_argument, 0, 3},
 	{0, 0, 0, 0},
 };
 
@@ -34,6 +35,7 @@ static void usage(void)
 	      " -V              print the version number of fsck.erofs and exit.\n"
 	      " -d#             set output message level to # (maximum 9)\n"
 	      " -p              print total compression ratio of all files\n"
+	      " --device=X      specify an extra device to be used together\n"
 	      " --extract       check if all files are well encoded\n"
 	      " --help          display this help and exit.\n",
 	      stderr);
@@ -46,7 +48,7 @@ static void erofsfsck_print_version(void)
 
 static int erofsfsck_parse_options_cfg(int argc, char **argv)
 {
-	int opt, i;
+	int opt, ret;
 
 	while ((opt = getopt_long(argc, argv, "Vd:p",
 				  long_options, NULL)) != -1) {
@@ -55,12 +57,12 @@ static int erofsfsck_parse_options_cfg(int argc, char **argv)
 			erofsfsck_print_version();
 			exit(0);
 		case 'd':
-			i = atoi(optarg);
-			if (i < EROFS_MSG_MIN || i > EROFS_MSG_MAX) {
-				erofs_err("invalid debug level %d", i);
+			ret = atoi(optarg);
+			if (ret < EROFS_MSG_MIN || ret > EROFS_MSG_MAX) {
+				erofs_err("invalid debug level %d", ret);
 				return -EINVAL;
 			}
-			cfg.c_dbg_lvl = i;
+			cfg.c_dbg_lvl = ret;
 			break;
 		case 'p':
 			fsckcfg.print_comp_ratio = true;
@@ -70,6 +72,12 @@ static int erofsfsck_parse_options_cfg(int argc, char **argv)
 			exit(0);
 		case 2:
 			fsckcfg.check_decomp = true;
+			break;
+		case 3:
+			ret = blob_open_ro(optarg);
+			if (ret)
+				return ret;
+			++sbi.extra_devices;
 			break;
 		default:
 			return -EINVAL;
@@ -97,7 +105,7 @@ static int erofs_check_sb_chksum(void)
 	u32 crc;
 	struct erofs_super_block *sb;
 
-	ret = blk_read(buf, 0, 1);
+	ret = blk_read(0, buf, 0, 1);
 	if (ret) {
 		erofs_err("failed to read superblock to check checksum: %d",
 			  ret);
@@ -275,10 +283,11 @@ static int verify_compressed_inode(struct erofs_inode *inode)
 	struct erofs_map_blocks map = {
 		.index = UINT_MAX,
 	};
+	struct erofs_map_dev mdev;
 	int ret = 0;
 	u64 pchunk_len = 0;
 	erofs_off_t end = inode->i_size;
-	unsigned int algorithmformat, raw_size = 0, buffer_size = 0;
+	unsigned int raw_size = 0, buffer_size = 0;
 	char *raw = NULL, *buffer = NULL;
 
 	while (end > 0) {
@@ -301,10 +310,6 @@ static int verify_compressed_inode(struct erofs_inode *inode)
 		if (!fsckcfg.check_decomp || !(map.m_flags & EROFS_MAP_MAPPED))
 			continue;
 
-		algorithmformat = map.m_flags & EROFS_MAP_ZIPPED ?
-						Z_EROFS_COMPRESSION_LZ4 :
-						Z_EROFS_COMPRESSION_SHIFTED;
-
 		if (map.m_plen > raw_size) {
 			raw_size = map.m_plen;
 			raw = realloc(raw, raw_size);
@@ -317,10 +322,21 @@ static int verify_compressed_inode(struct erofs_inode *inode)
 			BUG_ON(!buffer);
 		}
 
-		ret = dev_read(raw, map.m_pa, map.m_plen);
+		mdev = (struct erofs_map_dev) {
+			.m_deviceid = map.m_deviceid,
+			.m_pa = map.m_pa,
+		};
+		ret = erofs_map_dev(&sbi, &mdev);
+		if (ret) {
+			erofs_err("failed to map device of m_pa %" PRIu64 ", m_deviceid %u @ nid %llu: %d",
+				  map.m_pa, map.m_deviceid, inode->nid | 0ULL, ret);
+			goto out;
+		}
+
+		ret = dev_read(mdev.m_deviceid, raw, mdev.m_pa, map.m_plen);
 		if (ret < 0) {
 			erofs_err("failed to read compressed data of m_pa %" PRIu64 ", m_plen %" PRIu64 " @ nid %llu: %d",
-				  map.m_pa, map.m_plen, inode->nid | 0ULL, ret);
+				  mdev.m_pa, map.m_plen, inode->nid | 0ULL, ret);
 			goto out;
 		}
 
@@ -330,13 +346,13 @@ static int verify_compressed_inode(struct erofs_inode *inode)
 					.decodedskip = 0,
 					.inputsize = map.m_plen,
 					.decodedlength = map.m_llen,
-					.alg = algorithmformat,
+					.alg = map.m_algorithmformat,
 					.partial_decoding = 0
 					 });
 
 		if (ret < 0) {
 			erofs_err("failed to decompress data of m_pa %" PRIu64 ", m_plen %" PRIu64 " @ nid %llu: %d",
-				  map.m_pa, map.m_plen, inode->nid | 0ULL, ret);
+				  mdev.m_pa, map.m_plen, inode->nid | 0ULL, ret);
 			goto out;
 		}
 	}
@@ -381,7 +397,7 @@ static int erofs_verify_xattr(struct erofs_inode *inode)
 	}
 
 	addr = iloc(inode->nid) + inode->inode_isize;
-	ret = dev_read(buf, addr, xattr_hdr_size);
+	ret = dev_read(0, buf, addr, xattr_hdr_size);
 	if (ret < 0) {
 		erofs_err("failed to read xattr header @ nid %llu: %d",
 			  inode->nid | 0ULL, ret);
@@ -411,7 +427,7 @@ static int erofs_verify_xattr(struct erofs_inode *inode)
 	while (remaining > 0) {
 		unsigned int entry_sz;
 
-		ret = dev_read(buf, addr, xattr_entry_size);
+		ret = dev_read(0, buf, addr, xattr_entry_size);
 		if (ret) {
 			erofs_err("failed to read xattr entry @ nid %llu: %d",
 				  inode->nid | 0ULL, ret);
@@ -558,12 +574,12 @@ int main(int argc, char **argv)
 	err = erofs_read_superblock();
 	if (err) {
 		erofs_err("failed to read superblock");
-		goto exit;
+		goto exit_dev_close;
 	}
 
 	if (erofs_sb_has_sb_chksum() && erofs_check_sb_chksum()) {
 		erofs_err("failed to verify superblock checksum");
-		goto exit;
+		goto exit_dev_close;
 	}
 
 	erofs_check_inode(sbi.root_nid, sbi.root_nid);
@@ -582,7 +598,10 @@ int main(int argc, char **argv)
 		}
 	}
 
+exit_dev_close:
+	dev_close();
 exit:
+	blob_closeall();
 	erofs_exit_configure();
 	return err ? 1 : 0;
 }

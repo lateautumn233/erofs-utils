@@ -37,7 +37,7 @@ static unsigned char erofs_ftype_by_mode[S_IFMT >> S_SHIFT] = {
 	[S_IFLNK >> S_SHIFT]  = EROFS_FT_SYMLINK,
 };
 
-static unsigned char erofs_mode_to_ftype(umode_t mode)
+unsigned char erofs_mode_to_ftype(umode_t mode)
 {
 	return erofs_ftype_by_mode[(mode & S_IFMT) >> S_SHIFT];
 }
@@ -162,11 +162,15 @@ int erofs_prepare_dir_file(struct erofs_inode *dir, unsigned int nr_subdirs)
 
 	/* dot is pointed to the current dir inode */
 	d = erofs_d_alloc(dir, ".");
+	if (IS_ERR(d))
+		return PTR_ERR(d);
 	d->inode = erofs_igrab(dir);
 	d->type = EROFS_FT_DIR;
 
 	/* dotdot is pointed to the parent dir */
 	d = erofs_d_alloc(dir, "..");
+	if (IS_ERR(d))
+		return PTR_ERR(d);
 	d->inode = erofs_igrab(dir->i_parent);
 	d->type = EROFS_FT_DIR;
 
@@ -390,7 +394,10 @@ int erofs_write_file(struct erofs_inode *inode)
 
 	if (cfg.c_chunkbits) {
 		inode->u.chunkbits = cfg.c_chunkbits;
-		inode->u.chunkformat = EROFS_CHUNK_FORMAT_INDEXES;
+		/* chunk indexes when explicitly specified */
+		inode->u.chunkformat = 0;
+		if (cfg.c_force_chunkformat == FORCE_INODE_CHUNK_INDEXES)
+			inode->u.chunkformat = EROFS_CHUNK_FORMAT_INDEXES;
 		return erofs_blob_write_chunked_file(inode);
 	}
 
