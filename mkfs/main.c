@@ -47,6 +47,7 @@ static struct option long_options[] = {
 	{"compress-hints", required_argument, NULL, 10},
 	{"chunksize", required_argument, NULL, 11},
 	{"quiet", no_argument, 0, 12},
+	{"blobdev", required_argument, NULL, 13},
 #ifdef WITH_ANDROID
 	{"mount-point", required_argument, NULL, 512},
 	{"product-out", required_argument, NULL, 513},
@@ -83,6 +84,7 @@ static void usage(void)
 	      " -UX                   use a given filesystem UUID\n"
 #endif
 	      " --all-root            make all files owned by root\n"
+	      " --blobdev=X           specify an extra device X to store chunked data\n"
 	      " --chunksize=#         generate chunk-based files with #-byte chunks\n"
 	      " --compress-hints=X    specify a file to configure per-file compression strategy\n"
 	      " --exclude-path=X      avoid including file X (X = exact literal path)\n"
@@ -171,6 +173,18 @@ static int parse_extended_opts(const char *opts)
 			if (vallen)
 				return -EINVAL;
 			cfg.c_noinline_data = true;
+		}
+
+		if (MATCH_EXTENTED_OPT("force-inode-blockmap", token, keylen)) {
+			if (vallen)
+				return -EINVAL;
+			cfg.c_force_chunkformat = FORCE_INODE_BLOCK_MAP;
+		}
+
+		if (MATCH_EXTENTED_OPT("force-chunk-indexes", token, keylen)) {
+			if (vallen)
+				return -EINVAL;
+			cfg.c_force_chunkformat = FORCE_INODE_CHUNK_INDEXES;
 		}
 	}
 	return 0;
@@ -348,6 +362,9 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 		case 12:
 			quiet = true;
 			break;
+		case 13:
+			cfg.c_blobdev_path = optarg;
+			break;
 		case 1:
 			usage();
 			exit(0);
@@ -359,6 +376,18 @@ static int mkfs_parse_options_cfg(int argc, char *argv[])
 
 	if (optind >= argc)
 		return -EINVAL;
+
+	if (cfg.c_blobdev_path && cfg.c_chunkbits < LOG_BLOCK_SIZE) {
+		erofs_err("--blobdev must be used together with --chunksize");
+		return -EINVAL;
+	}
+
+	/* TODO: can be implemented with (deviceslot) mapped_blkaddr */
+	if (cfg.c_blobdev_path &&
+	    cfg.c_force_chunkformat == FORCE_INODE_BLOCK_MAP) {
+		erofs_err("--blobdev cannot work with block map currently");
+		return -EINVAL;
+	}
 
 	cfg.c_img_path = strdup(argv[optind++]);
 	if (!cfg.c_img_path)
@@ -401,6 +430,8 @@ int erofs_mkfs_update_super_block(struct erofs_buffer_head *bh,
 		.feature_incompat = cpu_to_le32(sbi.feature_incompat),
 		.feature_compat = cpu_to_le32(sbi.feature_compat &
 					      ~EROFS_FEATURE_COMPAT_SB_CHKSUM),
+		.extra_devices = cpu_to_le16(sbi.extra_devices),
+		.devt_slotoff = cpu_to_le16(sbi.devt_slotoff),
 	};
 	const unsigned int sb_blksize =
 		round_up(EROFS_SUPER_END, EROFS_BLKSIZ);
@@ -436,7 +467,7 @@ static int erofs_mkfs_superblock_csum_set(void)
 	u32 crc;
 	struct erofs_super_block *sb;
 
-	ret = blk_read(buf, 0, 1);
+	ret = blk_read(0, buf, 0, 1);
 	if (ret) {
 		erofs_err("failed to read superblock to set checksum: %s",
 			  erofs_strerror(ret));
@@ -549,7 +580,7 @@ int main(int argc, char **argv)
 	}
 
 	if (cfg.c_chunkbits) {
-		err = erofs_blob_init();
+		err = erofs_blob_init(cfg.c_blobdev_path);
 		if (err)
 			return 1;
 	}
@@ -626,6 +657,12 @@ int main(int argc, char **argv)
 		goto exit;
 	}
 
+	err = erofs_generate_devtable();
+	if (err) {
+		erofs_err("Failed to generate device table: %s",
+			  erofs_strerror(err));
+		goto exit;
+	}
 #ifdef HAVE_LIBUUID
 	uuid_unparse_lower(sbi.uuid, uuid_str);
 #endif
