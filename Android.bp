@@ -76,13 +76,13 @@ cc_defaults {
         "external/e2fsprogs/lib/",
     ],
     generated_headers: ["erofs-utils-version.h"],
-    shared_libs: [
+    static_libs: [
+        "libbase",
         "libcutils",
         "libext2_uuid",
-        "libselinux",
-    ],
-    static_libs: [
+        "liblog",
         "liblz4",
+        "libselinux",
     ],
 }
 

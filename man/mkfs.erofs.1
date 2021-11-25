@@ -51,6 +51,15 @@ Forcely generate compact inodes (32-byte inodes) to output.
 .TP
 .BI force-inode-extended
 Forcely generate extended inodes (64-byte inodes) to output.
+.TP
+.BI noinline_data
+Don't inline regular files for FSDAX support (Linux v5.15+).
+.TP
+.BI force-inode-blockmap
+Forcely generate inode chunk format in 4-byte block address array.
+.TP
+.BI force-chunk-indexes
+Forcely generate inode chunk format in 8-byte chunk indexes (with device id).
 .RE
 .TP
 .BI "\-T " #
@@ -65,6 +74,9 @@ like this: "c1b9d5a2-f162-11cf-9ece-0020afc76f16".
 .TP
 .B \-\-all-root
 Make all files owned by root.
+.TP
+.BI "\-\-blobdev " file
+Specify another extra blob device to store chunk-based data.
 .TP
 .BI "\-\-chunksize " #
 Generate chunk-based files with #-byte chunks.
