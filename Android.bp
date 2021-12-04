@@ -103,10 +103,12 @@ cc_defaults {
     },
 }
 
-cc_binary_host {
+cc_binary {
     name: "mkfs.erofs",
 
     defaults: ["mkfs-erofs_defaults"],
+    host_supported: true,
+    recovery_available: true,
 }
 
 cc_binary_host {
@@ -115,9 +117,11 @@ cc_binary_host {
     defaults: ["mkfs-erofs_defaults"],
 }
 
-cc_binary_host {
+cc_binary {
     name: "dump.erofs",
     defaults: ["erofs-utils_defaults"],
+    host_supported: true,
+    recovery_available: true,
     srcs: [
         "lib/*.c",
         "dump/*.c",
@@ -129,9 +133,11 @@ cc_binary_host {
     },
 }
 
-cc_binary_host {
+cc_binary {
     name: "fsck.erofs",
     defaults: ["erofs-utils_defaults"],
+    host_supported: true,
+    recovery_available: true,
     srcs: [
         "lib/*.c",
         "fsck/*.c",
