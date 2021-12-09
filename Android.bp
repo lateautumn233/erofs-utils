@@ -52,7 +52,7 @@ genrule {
 }
 
 cc_defaults {
-    name: "erofs-utils_defaults",
+    name: "erofs-utils_export_defaults",
 
     cflags: [
         "-Wall",
@@ -60,7 +60,7 @@ cc_defaults {
         "-Wno-ignored-qualifiers",
         "-Wno-pointer-arith",
         "-Wno-unused-parameter",
-        "-include erofs-utils-version.h",
+        "-Wno-unused-function",
         "-DHAVE_FALLOCATE",
         "-DHAVE_LINUX_TYPES_H",
         "-DHAVE_LIBSELINUX",
@@ -68,6 +68,15 @@ cc_defaults {
         "-DLZ4_ENABLED",
         "-DLZ4HC_ENABLED",
         "-DWITH_ANDROID",
+    ],
+}
+
+cc_defaults {
+    name: "erofs-utils_defaults",
+    defaults: ["erofs-utils_export_defaults"],
+
+    cflags: [
+        "-include erofs-utils-version.h",
     ],
     local_include_dirs: [
         "include",
@@ -86,6 +95,23 @@ cc_defaults {
     ],
 }
 
+cc_library {
+    host_supported: true,
+    recovery_available: true,
+    name: "liberofs",
+    defaults: ["erofs-utils_defaults"],
+    srcs: [
+        "lib/*.c",
+    ],
+    export_include_dirs: ["include"],
+
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+}
+
 cc_defaults {
     name: "mkfs-erofs_defaults",
 
@@ -94,6 +120,9 @@ cc_defaults {
     srcs: [
         "lib/*.c",
         "mkfs/*.c",
+    ],
+    static_libs: [
+        "liberofs",
     ],
 
     target: {
@@ -126,6 +155,9 @@ cc_binary {
         "lib/*.c",
         "dump/*.c",
     ],
+    static_libs: [
+        "liberofs",
+    ],
     target: {
         darwin: {
             enabled: false,
@@ -141,6 +173,9 @@ cc_binary {
     srcs: [
         "lib/*.c",
         "fsck/*.c",
+    ],
+    static_libs: [
+        "liberofs",
     ],
     target: {
         darwin: {
