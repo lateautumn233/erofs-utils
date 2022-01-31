@@ -133,6 +133,8 @@ if [ $? -ne 0 ]; then
     exit 4
 fi
 
+fsck.erofs --extract $OUTPUT_FILE
+
 SPARSE_SUFFIX=".sparse"
 if [ "$SPARSE" = true ]; then
     img2simg $OUTPUT_FILE $OUTPUT_FILE$SPARSE_SUFFIX
