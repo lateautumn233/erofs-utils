@@ -2,6 +2,7 @@
 #include "erofs/print.h"
 #include "erofs/dir.h"
 #include <stdlib.h>
+#include <sys/stat.h>
 
 static int traverse_dirents(struct erofs_dir_context *ctx,
 			    void *dentry_blk, unsigned int lblk,
