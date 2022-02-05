@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.14.2)
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_CXX_COMPILER clang++)
 project(erofs-utils)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -6,7 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Werror -Wno-ignored-qualifiers -Wno-pointer-arith -Wno-unused-parameter -Wno-unused-function -DHAVE_FALLOCATE -DHAVE_LINUX_TYPES_H -DHAVE_LIBSELINUX -DHAVE_LIBUUID -DLZ4_ENABLED -DLZ4HC_ENABLED -DWITH_ANDROID ")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-ignored-qualifiers -Wno-pointer-arith -Wno-unused-parameter -Wno-unused-function -DHAVE_FALLOCATE -DHAVE_LINUX_TYPES_H -DHAVE_LIBSELINUX -DHAVE_LIBUUID -DLZ4_ENABLED -DLZ4HC_ENABLED -DWITH_ANDROID")
 
-set(CMAKE_EXE_LINKER_FLAGS "-static")
+set(CMAKE_EXE_LINKER_FLAGS "-Wl,--gc-sections -static -s")
 
 set(SRC ${PROJECT_SOURCE_DIR}/src)
 
