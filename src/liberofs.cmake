@@ -9,4 +9,5 @@ add_library(${TARGET} STATIC
 include_directories(
     ${PROJECT_SOURCE_DIR}/lib
     ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src/lz4/lib
     )

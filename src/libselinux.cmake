@@ -22,5 +22,7 @@ set(SRC_LIST
 add_library(${TARGET} STATIC ${SRC_LIST})
 target_compile_definitions(${TARGET} PRIVATE -DUSE_PCRE2 -DPCRE2_CODE_UNIT_WIDTH=8 -DBUILD_HOST -DNO_DB_BACKEND -DNO_X_BACKEND -DNO_MEDIA_BACKEND -D_GNU_SOURCE -DDISABLE_BOOL -DNO_PERSISTENTLY_STORED_PATTERNS -DDISABLE_SETRANS -DDISABLE_SETRANS)
 
-target_include_directories(${TARGET} PRIVATE ${SRC}/selinux/libselinux/include)
-
+target_include_directories(${TARGET}
+    PRIVATE ${SRC}/selinux/libselinux/include
+    PRIVATE ${SRC}/pcre/include
+)
