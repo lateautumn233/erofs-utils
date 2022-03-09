@@ -183,18 +183,3 @@ cc_binary {
         },
     },
 }
-
-sh_binary_host {
-    name: "mkerofsimage.sh",
-    src: "mkerofsimage.sh",
-    required: [
-        "img2simg",
-        "mkfs.erofs",
-    ],
-
-    target: {
-        darwin: {
-            enabled: false,
-        },
-    },
-}
