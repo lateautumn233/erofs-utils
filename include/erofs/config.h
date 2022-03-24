@@ -43,6 +43,7 @@ struct erofs_configure {
 	char c_timeinherit;
 	char c_chunkbits;
 	bool c_noinline_data;
+	bool c_ignore_mtime;
 
 #ifdef HAVE_LIBSELINUX
 	struct selabel_handle *sehnd;
