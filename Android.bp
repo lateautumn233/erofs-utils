@@ -68,6 +68,8 @@ cc_defaults {
         "-DLZ4_ENABLED",
         "-DLZ4HC_ENABLED",
         "-DWITH_ANDROID",
+        "-DHAVE_MEMRCHR",
+        "-DHAVE_SYS_IOCTL_H",
     ],
 }
 
