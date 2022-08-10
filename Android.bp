@@ -57,6 +57,7 @@ cc_defaults {
     cflags: [
         "-Wall",
         "-Werror",
+        "-Wno-error=#warnings",
         "-Wno-ignored-qualifiers",
         "-Wno-pointer-arith",
         "-Wno-unused-parameter",
