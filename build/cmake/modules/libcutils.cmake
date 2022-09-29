@@ -73,6 +73,11 @@ endif()
 
 add_library(${TARGET} STATIC ${LIBCUTILS_SRCS})
 
+# Fix build error: exception specification in declaration does not match previous declaration
+# extern __pid_t gettid (void) __THROW;
+# cmd: sed -i 's|extern pid_t gettid();|__pid_t gettid() __THROW;|' src/core/include/cutils/threads.h
+execute_process(COMMAND sh "${PROJECT_SOURCE_DIR}/scripts/fix_gettid_define")
+
 target_include_directories(${TARGET} PRIVATE
     "${TARGET_SRC_DIR}/include"
     "${MODULES_SRC}/core/libutils/include"
